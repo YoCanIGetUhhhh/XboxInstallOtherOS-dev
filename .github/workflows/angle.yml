@@ -1,0 +1,98 @@
+name: Build new ANGLE for Xbox (test)
+
+# Builds Google's current ANGLE (OpenGL ES on Direct3D 11) as Xbox/UWP app DLLs, checks them against the
+# UWP-allowed function list and keeps them as the "angle-new" download. The app itself is not changed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      angle_ref:
+        description: "ANGLE branch or commit to build (main = newest)"
+        type: string
+        default: "main"
+
+jobs:
+  angle:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    env:
+      DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
+      DEPOT_TOOLS_UPDATE: "1"
+    steps:
+      - name: Get the code (for the checker script)
+        uses: actions/checkout@v4
+
+      - name: Get depot_tools (Google's build helpers)
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git C:\depot_tools
+          "C:\depot_tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Get the ANGLE source and its tools
+        shell: pwsh
+        run: |
+          git clone https://chromium.googlesource.com/angle/angle C:\angle
+          cd C:\angle
+          git checkout "${{ inputs.angle_ref }}"
+          git log -1 --format="ANGLE commit %h %ad" --date=short | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-report.txt
+          python scripts/bootstrap.py
+          gclient sync --no-history --shallow -j 8 2>&1 | Select-Object -Last 40
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error title=gclient sync failed::see log"; exit 1 }
+
+      - name: Configure ANGLE for Xbox apps (UWP, x64, Direct3D 11 only)
+        shell: pwsh
+        run: |
+          cd C:\angle
+          $gnargs = 'target_os="winuwp" target_cpu="x64" is_debug=false is_component_build=false angle_enable_vulkan=false angle_enable_gl=false angle_enable_d3d9=false angle_enable_null=false angle_enable_swiftshader=false angle_build_tests=false angle_has_frame_capture=false'
+          gn gen out/uwp --args="$gnargs" 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-gn.txt
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error title=gn gen failed::$((Get-Content $env:GITHUB_WORKSPACE\angle-gn.txt -Raw) -replace "`r?`n", ' | ')"; exit 1 }
+
+      - name: Build libEGL.dll and libGLESv2.dll
+        shell: pwsh
+        run: |
+          cd C:\angle
+          autoninja -C out/uwp libEGL libGLESv2 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-build.txt | Select-Object -Last 60
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Check the DLLs against the UWP-allowed list
+        shell: pwsh
+        run: |
+          python -m pip install pefile | Out-Null
+          $lib = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Lib" -Recurse -Filter WindowsApp.lib | Where-Object { $_.FullName -match "\\um\\x64\\" } | Select-Object -First 1 -ExpandProperty FullName
+          $nm = Get-ChildItem "C:\Program Files\LLVM\bin\llvm-nm.exe", "C:\angle\third_party\llvm-build\Release+Asserts\bin\llvm-nm.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          Write-Host "WindowsApp.lib: $lib  nm: $nm"
+          & $nm -g $lib 2>$null | Out-File -Encoding utf8 windowsapp_symbols.txt
+          New-Item -ItemType Directory angle-new | Out-Null
+          Copy-Item C:\angle\out\uwp\libEGL.dll, C:\angle\out\uwp\libGLESv2.dll angle-new\
+          Get-ChildItem C:\angle\out\uwp\*.dll | ForEach-Object { "$($_.Name) $([int]($_.Length/1024)) KB" } | Tee-Object -FilePath angle-dlls.txt
+          python native/uwp_audit.py angle-new\libGLESv2.dll windowsapp_symbols.txt angle-new 2>&1 | Tee-Object -FilePath angle-audit.txt
+          python native/uwp_audit.py angle-new\libEGL.dll windowsapp_symbols.txt angle-new 2>&1 | Tee-Object -FilePath angle-audit.txt -Append
+
+      - name: Keep the DLLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: angle-new
+          path: angle-new/
+          retention-days: 14
+
+      - name: Post the results as readable notes
+        if: always()
+        shell: pwsh
+        run: |
+          function Emit($title, $file, $tail) {
+            if (-not (Test-Path $file)) { Write-Host "::notice title=$title::file missing: $file"; return }
+            $lines = Get-Content $file
+            if ($tail -gt 0) { $lines = $lines | Select-Object -Last $tail }
+            $text = ($lines -join "`n")
+            $i = 0
+            while ($text.Length -gt 0 -and $i -lt 6) {
+              $chunk = $text.Substring(0, [Math]::Min(3500, $text.Length)); $text = $text.Substring($chunk.Length); $i++
+              $m = $chunk.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+              Write-Host "::notice title=$title ($i)::$m"
+            }
+          }
+          Emit "ANGLE REPORT" angle-report.txt 0
+          Emit "ANGLE GN" angle-gn.txt 40
+          Emit "ANGLE BUILD (tail)" angle-build.txt 40
+          Emit "ANGLE DLLS" angle-dlls.txt 0
+          Emit "ANGLE AUDIT" angle-audit.txt 0
