@@ -43,8 +43,23 @@ jobs:
         shell: pwsh
         run: |
           cd C:\angle
-          $gnargs = 'target_os="winuwp" target_cpu="x64" is_debug=false is_component_build=false angle_enable_vulkan=false angle_enable_gl=false angle_enable_d3d9=false angle_enable_null=false angle_enable_swiftshader=false angle_build_tests=false angle_has_frame_capture=false'
-          gn gen out/uwp --args="$gnargs" 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-gn.txt
+          New-Item -ItemType Directory -Force out\uwp | Out-Null
+          # Written to args.gn directly (passing quotes on the command line gets them stripped by Windows).
+          @(
+            'target_os = "winuwp"'
+            'target_cpu = "x64"'
+            'is_debug = false'
+            'is_component_build = false'
+            'angle_enable_vulkan = false'
+            'angle_enable_gl = false'
+            'angle_enable_d3d9 = false'
+            'angle_enable_null = false'
+            'angle_enable_swiftshader = false'
+            'angle_build_tests = false'
+            'angle_has_frame_capture = false'
+          ) | Set-Content -Encoding ascii out\uwp\args.gn
+          Get-Content out\uwp\args.gn
+          gn gen out/uwp 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-gn.txt
           if ($LASTEXITCODE -ne 0) { Write-Host "::error title=gn gen failed::$((Get-Content $env:GITHUB_WORKSPACE\angle-gn.txt -Raw) -replace "`r?`n", ' | ')"; exit 1 }
 
       - name: Build libEGL.dll and libGLESv2.dll
