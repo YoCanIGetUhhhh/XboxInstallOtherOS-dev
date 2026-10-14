@@ -93,6 +93,8 @@ jobs:
             foreach ($u in $used) { if (-not ($names.n -contains $u)) { $c = $c.Replace($u, $best); "$($h.Path): $u -> $best" | Out-File -Append -Encoding utf8 $env:GITHUB_WORKSPACE\angle-sdk.txt } }
             Set-Content -NoNewline -Encoding utf8 $h.Path $c
           }
+          python $env:GITHUB_WORKSPACE\native\patch_angle_uwp_toolchain.py $env:GITHUB_WORKSPACE\angle-toolchain.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           New-Item -ItemType Directory -Force out\uwp | Out-Null
           # Written to args.gn directly (passing quotes on the command line gets them stripped by Windows).
           @(
@@ -171,6 +173,7 @@ jobs:
           Emit "ANGLE REPORT" angle-report.txt 0
           Emit "ANGLE SYNC (tail)" angle-sync.txt 25
           Emit "ANGLE SDK" angle-sdk.txt 0
+          Emit "ANGLE TOOLCHAIN" angle-toolchain.txt 0
           Emit "ANGLE GN" angle-gn.txt 40
           Emit "ANGLE ERROR" angle-error.txt 0
           Emit "ANGLE BUILD (tail)" angle-build.txt 15
