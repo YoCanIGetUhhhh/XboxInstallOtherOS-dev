@@ -79,6 +79,20 @@ jobs:
             Set-Content -NoNewline -Encoding utf8 $f $c
             "$f : $($found -join ', ') -> $sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_WORKSPACE\angle-sdk.txt
           }
+          # Google's build targets a newer Windows than SDK 26100 knows (NTDDI_WIN11_BR). Use the newest name this SDK has.
+          $kit = "${env:ProgramFiles(x86)}\Windows Kits\10"
+          $sdkh = Get-Content "$kit\Include\$sdk\shared\sdkddkver.h" -Raw
+          $names = [regex]::Matches($sdkh, "#define\s+(NTDDI_WIN1[01]_[A-Z0-9]+)\s+0x([0-9A-Fa-f]+)") | ForEach-Object { [pscustomobject]@{ n = $_.Groups[1].Value; v = [Convert]::ToInt64($_.Groups[2].Value, 16) } }
+          $best = ($names | Sort-Object v | Select-Object -Last 1).n
+          if (-not $best) { Write-Host "::error::no NTDDI names found in sdkddkver.h"; exit 1 }
+          "newest NTDDI name in SDK: $best" | Out-File -Append -Encoding utf8 $env:GITHUB_WORKSPACE\angle-sdk.txt
+          $hits = Get-ChildItem build -Recurse -Include *.gn, *.gni | Select-String -Pattern "NTDDI_WIN1[01]_[A-Z0-9]+" -List
+          foreach ($h in $hits) {
+            $c = Get-Content $h.Path -Raw
+            $used = [regex]::Matches($c, "NTDDI_WIN1[01]_[A-Z0-9]+") | ForEach-Object { $_.Value } | Sort-Object -Unique
+            foreach ($u in $used) { if (-not ($names.n -contains $u)) { $c = $c.Replace($u, $best); "$($h.Path): $u -> $best" | Out-File -Append -Encoding utf8 $env:GITHUB_WORKSPACE\angle-sdk.txt } }
+            Set-Content -NoNewline -Encoding utf8 $h.Path $c
+          }
           New-Item -ItemType Directory -Force out\uwp | Out-Null
           # Written to args.gn directly (passing quotes on the command line gets them stripped by Windows).
           @(
