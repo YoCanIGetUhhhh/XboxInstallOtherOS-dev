@@ -152,6 +152,12 @@ jobs:
           Get-ChildItem C:\angle\out\uwp\*.dll | ForEach-Object { "$($_.Name) $([int]($_.Length/1024)) KB" } | Tee-Object -FilePath angle-dlls.txt
           python native/uwp_audit.py (Get-ChildItem angle-new\libGLESv2*.dll | Select-Object -First 1 -ExpandProperty FullName) windowsapp_symbols.txt angle-new 2>&1 | Tee-Object -FilePath angle-audit.txt
           python native/uwp_audit.py (Get-ChildItem angle-new\libEGL*.dll | Select-Object -First 1 -ExpandProperty FullName) windowsapp_symbols.txt angle-new 2>&1 | Tee-Object -FilePath angle-audit.txt -Append
+          # Imports from the app versions of the C++ runtime (msvcp140_app / vcruntime140_app) are fine: they come
+          # from the VCLibs package the app already depends on. Anything else would be a real problem.
+          $bad = Select-String -Path angle-audit.txt -Pattern "^  from (.+) \(" | ForEach-Object { $_.Matches[0].Groups[1].Value } | Where-Object { $_ -notmatch "_app\.dll$" } | Sort-Object -Unique
+          if ($bad) { Write-Host "::error title=ANGLE uses functions apps may not use::$($bad -join ', ')"; exit 1 }
+          Write-Host "::notice title=ANGLE UWP check::only C++ runtime (app version) imports are outside WindowsApp.lib - OK"
+          exit 0
 
       - name: Keep the DLLs
         uses: actions/upload-artifact@v4
