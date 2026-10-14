@@ -104,7 +104,7 @@ jobs:
             'is_component_build = false'
             'angle_enable_vulkan = false'
             'angle_enable_gl = false'
-            'angle_enable_d3d9 = false'
+            'angle_enable_perfetto = false'
             'angle_enable_null = false'
             'angle_enable_swiftshader = false'
             'angle_build_tests = false'
