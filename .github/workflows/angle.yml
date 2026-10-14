@@ -36,8 +36,15 @@ jobs:
           git checkout "${{ inputs.angle_ref }}"
           git log -1 --format="ANGLE commit %h %ad" --date=short | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-report.txt
           python scripts/bootstrap.py
-          gclient sync --no-history --shallow -j 8 2>&1 | Select-Object -Last 40
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error title=gclient sync failed::see log"; exit 1 }
+          $ok = $false
+          foreach ($try in 1, 2, 3) {
+            gclient sync --no-history --shallow -j 8 2>&1 | Out-File -Encoding utf8 $env:GITHUB_WORKSPACE\angle-sync.txt
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "gclient sync attempt $try failed, trying again"
+            Start-Sleep -Seconds 30
+          }
+          Get-Content $env:GITHUB_WORKSPACE\angle-sync.txt | Select-Object -Last 40
+          if (-not $ok) { Write-Host "::error title=gclient sync failed::$((Get-Content $env:GITHUB_WORKSPACE\angle-sync.txt | Select-Object -Last 15) -join ' | ')"; exit 1 }
 
       - name: Hide incomplete Windows SDK versions (so the build picks a complete one)
         shell: pwsh
@@ -137,6 +144,7 @@ jobs:
             }
           }
           Emit "ANGLE REPORT" angle-report.txt 0
+          Emit "ANGLE SYNC (tail)" angle-sync.txt 25
           Emit "ANGLE SDK" angle-sdk.txt 0
           Emit "ANGLE GN" angle-gn.txt 40
           Emit "ANGLE BUILD (tail)" angle-build.txt 40
