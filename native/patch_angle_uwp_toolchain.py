@@ -26,7 +26,7 @@ def block_end(text, start):
 
 
 changed = 0
-clang = '"\\"" + rebase_path("//third_party/llvm-build/Release+Asserts/bin/clang-cl.exe", root_build_dir) + "\\""'
+clang = '"\\"" + rebase_path("$clang_base_path/bin/clang-cl.exe", root_build_dir) + "\\""'
 pos = 0
 while True:
     m = re.search(r'msvc_toolchain\("uwp_[^)]*\)', t[pos:])
@@ -38,16 +38,15 @@ while True:
     report.append("=== before ===\n" + block)
     nb, n1 = re.subn(r'(?m)^(\s*)cl\s*=\s*.*cl\.exe.*$', lambda mm: mm.group(1) + "cl = " + clang, block)
     nb, n2 = re.subn(r'is_clang\s*=\s*false', 'is_clang = true', nb)
-    # clang toolchains must be given the system include (and library) folders, like the desktop ones are.
-    extra = []
-    for var, want in (("sys_include_flags", "imsvc"), ("sys_lib_flags", "lld")):
-        cands = re.findall(r'%s\s*=\s*"([^"]*)"' % var, t)
-        report.append("%s candidates: %s" % (var, cands))
-        pick = [c for c in cands if want in c] or cands[:1]
-        if pick:
-            val = re.sub(r'\$\{[A-Za-z_]+\.', '${store_cpu_toolchain_data.', pick[0])
-            extra.append('    %s = "%s"' % (var, val))
-    if extra and "sys_include_flags" not in nb:
+    # clang toolchains must be given the system include (and library) folders, like the desktop clang ones
+    # in toolchain.gni are (sys_include_flags / sys_lib_flags from the store toolchain data).
+    extra = [
+        '    sys_include_flags = "${store_cpu_toolchain_data.include_flags_imsvc}"',
+        '    if (use_lld) {',
+        '      sys_lib_flags = "-libpath:" + rebase_path("$clang_base_path/lib/clang/$clang_version/lib/windows", root_build_dir) + " ${store_cpu_toolchain_data.libpath_lldlink_flags}"',
+        '    }',
+    ]
+    if "sys_include_flags" not in nb:
         nb = re.sub(r'(?m)^(\s*cl = .*)$', lambda mm: mm.group(1) + "\n" + "\n".join(extra), nb, count=1)
     report.append("cl replaced: %d, is_clang changed: %d" % (n1, n2))
     report.append("=== after ===\n" + nb)
