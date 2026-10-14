@@ -29,7 +29,7 @@ changed = 0
 clang = '"\\"" + rebase_path("//third_party/llvm-build/Release+Asserts/bin/clang-cl.exe", root_build_dir) + "\\""'
 pos = 0
 while True:
-    m = re.search(r'msvc_toolchain\("uwp_[a-z0-9_]+"\)', t[pos:])
+    m = re.search(r'msvc_toolchain\("uwp_[^)]*\)', t[pos:])
     if not m:
         break
     s = pos + m.start()
