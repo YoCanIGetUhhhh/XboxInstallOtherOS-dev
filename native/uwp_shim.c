@@ -15,6 +15,7 @@ __declspec(dllimport) DW  __stdcall WaitForMultipleObjectsEx(DW, const PV *, BOO
 __declspec(dllimport) void __stdcall SetLastError(DW);
 __declspec(dllimport) PV  __stdcall LoadPackagedLibrary(const unsigned short *, DW);
 __declspec(dllimport) int __stdcall MultiByteToWideChar(unsigned, DW, const char *, int, unsigned short *, int);
+__declspec(dllimport) DW  __stdcall GetEnvironmentVariableW(const unsigned short *, unsigned short *, DW);
 
 #define ERR_NOT_SUPPORTED 50UL
 
@@ -40,12 +41,39 @@ BOOL_ __stdcall EnumResourceLanguagesA(PV m, const char *t, const char *n, PV f,
 
 /* libepoxy (used by the graphics code) opens libEGL.dll with LoadLibraryA. In an app only
    LoadPackagedLibrary is allowed, and it finds DLLs inside the app package. */
-PV __stdcall LoadLibraryW(const unsigned short *name) { return LoadPackagedLibrary(name, 0); }
+/* The app can ship a second, newer ANGLE as libEGL_new.dll / libGLESv2_new.dll. When the app sets
+   UWP_ANGLE_SUFFIX (e.g. "_new"), requests for libEGL.dll / libGLESv2.dll are sent to those files. */
+static int uwp_lower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+static int uwp_is_angle(const unsigned short *n, int *stem)
+{
+    static const char *names[2] = { "libegl.dll", "libglesv2.dll" };
+    int k, i;
+    for (k = 0; k < 2; k++) {
+        for (i = 0; names[k][i] && n[i] && uwp_lower(n[i]) == names[k][i]; i++) { }
+        if (!names[k][i] && !n[i]) { *stem = i - 4; return 1; }
+    }
+    return 0;
+}
+static PV uwp_load(const unsigned short *name)
+{
+    unsigned short suf[16], buf[300];
+    int stem, i, j;
+    DW n = GetEnvironmentVariableW((const unsigned short *)L"UWP_ANGLE_SUFFIX", suf, 16);
+    if (n > 0 && n < 16 && uwp_is_angle(name, &stem)) {
+        for (i = 0; i < stem; i++) buf[i] = name[i];
+        for (j = 0; suf[j]; j++) buf[i++] = suf[j];
+        for (j = stem; name[j]; j++) buf[i++] = name[j];
+        buf[i] = 0;
+        return LoadPackagedLibrary(buf, 0);
+    }
+    return LoadPackagedLibrary(name, 0);
+}
+PV __stdcall LoadLibraryW(const unsigned short *name) { if (!name) { SetLastError(87); return 0; } return uwp_load(name); }
 PV __stdcall LoadLibraryA(const char *name)
 {
     unsigned short w[260];
     if (!name || MultiByteToWideChar(65001, 0, name, -1, w, 260) <= 0) { SetLastError(87); return 0; }
-    return LoadPackagedLibrary(w, 0);
+    return uwp_load(w);
 }
 
 /* Structured-exception dispatcher: QEMU has no __try/__except blocks, so "keep looking" is correct. */

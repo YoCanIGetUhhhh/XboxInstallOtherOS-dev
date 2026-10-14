@@ -215,7 +215,10 @@
         </Grid>
         <Border x:Name="CreditBox" Background="#B3000000" CornerRadius="6" Padding="12,4" Margin="0,0,10,8"
                 HorizontalAlignment="Right" VerticalAlignment="Bottom" IsHitTestVisible="False">
-            <TextBlock Text="VM creator - Steam: @YoCanIGetUhhhh" FontSize="14" Foreground="White"/>
+            <StackPanel>
+                <TextBlock Text="VM creator - Steam: @YoCanIGetUhhhh" FontSize="14" Foreground="White"/>
+                <TextBlock x:Name="VersionText" Text="" FontSize="12" Foreground="#CCFFFFFF" HorizontalAlignment="Right"/>
+            </StackPanel>
         </Border>
         <Grid x:Name="EggGrid" Visibility="Collapsed" Background="Black" Tapped="EggGrid_Tapped">
             <MediaPlayerElement x:Name="EggVideo" AutoPlay="True" Stretch="Uniform" AreTransportControlsEnabled="False"/>

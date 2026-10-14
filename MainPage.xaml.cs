@@ -64,6 +64,7 @@ namespace XboxVmHost
             }
             catch (Exception ex) { shown = "(could not read the last log: " + ex.Message + ")"; }
             LogText.Text = string.IsNullOrEmpty(shown) ? "Ready.\n" : shown + "\n";
+            try { VersionText.Text = "Version " + AppVersionText(); } catch { }
             RefreshStatus();
             InitVm();
             this.Loaded += (s, e) =>
@@ -251,6 +252,10 @@ namespace XboxVmHost
             };
             _marqueeTimer.Start();
         }
+
+        // Process environment (read by qemu.dll): picks which ANGLE files the GPU mode loads.
+        [DllImport("api-ms-win-core-processenvironment-l1-1-0.dll", EntryPoint = "SetEnvironmentVariableW", CharSet = CharSet.Unicode)]
+        private static extern bool SetEnvVar(string name, string value);
 
         [DllImport("qemu.dll", EntryPoint = "qemu_dll_main")]
         private static extern int qemu_dll_main(IntPtr outfile, int argc, IntPtr argv);
@@ -489,7 +494,7 @@ namespace XboxVmHost
         }
 
         // Screen size the virtual graphics card asks Linux to use. "Auto" lets Linux choose.
-        private static readonly string[] ScreenChoices = { "Auto", "1280x720", "1024x768", "800x600", "GPU" };
+        private static readonly string[] ScreenChoices = { "Auto", "1280x720", "1024x768", "800x600", "GPU", "GPU (new ANGLE)" };
         private static string ScreenCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "screen.cfg"); } }
         private static string VmScreen
         {
@@ -856,9 +861,9 @@ namespace XboxVmHost
                 "-monitor", "none", "-serial", "none"
             });
             // "GPU": virtual graphics card (Virgl) drawn by the Xbox GPU through ANGLE (Direct3D 11). Everything else keeps the plain card.
-            if (VmScreen == "GPU") list.AddRange(new string[] { "-display", "egl-headless,gl=es", "-device", "virtio-vga-gl" });
+            if (VmScreen.StartsWith("GPU")) list.AddRange(new string[] { "-display", "egl-headless,gl=es", "-device", "virtio-vga-gl" });
             else list.AddRange(new string[] { "-display", "none" });
-            if (VmScreen == "GPU") { }
+            if (VmScreen.StartsWith("GPU")) { }
             else if (VmScreen == "Auto") list.AddRange(new string[] { "-vga", "std" });
             else
             {
@@ -892,6 +897,7 @@ namespace XboxVmHost
             try { File.WriteAllText(FlagPath, title + "\nCommand: " + cmd + "\nStarted: " + DateTime.Now.ToString("HH:mm:ss") + "\n"); } catch { }
             Log("Command: " + cmd);
             Log("Step 1: handing over to QEMU...");
+            try { SetEnvVar("UWP_ANGLE_SUFFIX", VmScreen == "GPU (new ANGLE)" ? "_new" : null); } catch (Exception ex) { Log("Could not choose the ANGLE files: " + ex.Message); }
 
             if (_frameBuf == null) _frameBuf = new byte[1280 * 1024 * 4];
             _frameSeq = 0;

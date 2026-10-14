@@ -11,6 +11,10 @@ on:
         description: "Only when the QEMU box is unticked: the number of an earlier run whose QEMU files should be reused (the number at the end of that run's web address)."
         type: string
         default: ""
+      angle_run:
+        description: "Optional: the run number at the end of a 'Build new ANGLE for Xbox' run's web address; its DLLs are added for the 'GPU (new ANGLE)' screen option."
+        type: string
+        default: ""
       make_release:
         description: "Also publish the finished package as a public Release (a download page anyone can use without a GitHub account)."
         type: boolean
@@ -397,6 +401,24 @@ jobs:
           Write-Host "Using $($egl.FullName)"
           Write-Host "Using $($gles.FullName)"
           Get-ChildItem libEGL.dll, libGLESv2.dll | Format-Table Name, Length
+
+      - name: Get the newer ANGLE built by the "Build new ANGLE" workflow
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.angle_run != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: angle-new
+          path: angle-new-dl
+          run-id: ${{ inputs.angle_run }}
+          github-token: ${{ github.token }}
+
+      - name: Put the newer ANGLE next to the app (as libEGL_new.dll / libGLESv2_new.dll)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.angle_run != '' }}
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem angle-new-dl -File -Filter *_new.dll
+          if ($files.Count -lt 2) { Write-Host "::error::angle-new download has no *_new.dll files: $((Get-ChildItem angle-new-dl).Name -join ', ')"; exit 1 }
+          Copy-Item $files.FullName . -Force
+          Write-Host "::notice title=Newer ANGLE added::$(($files | ForEach-Object { $_.Name + ' ' + $_.Length }) -join ' | ')"
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
