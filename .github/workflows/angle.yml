@@ -94,6 +94,7 @@ jobs:
             'angle_build_tests = false'
             'angle_has_frame_capture = false'
             'angle_libs_suffix = "_new"'
+            'treat_warnings_as_errors = false'
           ) | Set-Content -Encoding ascii out\uwp\args.gn
           Get-Content out\uwp\args.gn
           gn gen out/uwp 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-gn.txt
@@ -104,7 +105,17 @@ jobs:
         run: |
           cd C:\angle
           autoninja -C out/uwp libEGL libGLESv2 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-build.txt | Select-Object -Last 60
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($LASTEXITCODE -ne 0) {
+            # Keep the compiler's own error text for the notes.
+            $o = "out\uwp\siso_output"
+            if (Test-Path $o) {
+              $lines = Get-Content $o
+              $hit = ($lines | Select-String -Pattern "error" | Select-Object -First 1)
+              $start = if ($hit) { [Math]::Max(0, $hit.LineNumber - 15) } else { [Math]::Max(0, $lines.Count - 80) }
+              $lines[$start..([Math]::Min($lines.Count - 1, $start + 80))] | Out-File -Encoding utf8 $env:GITHUB_WORKSPACE\angle-error.txt
+            } else { "no siso_output; files: $((Get-ChildItem out\uwp -File).Name -join ', ')" | Out-File -Encoding utf8 $env:GITHUB_WORKSPACE\angle-error.txt }
+            exit 1
+          }
 
       - name: Check the DLLs against the UWP-allowed list
         shell: pwsh
@@ -147,6 +158,7 @@ jobs:
           Emit "ANGLE SYNC (tail)" angle-sync.txt 25
           Emit "ANGLE SDK" angle-sdk.txt 0
           Emit "ANGLE GN" angle-gn.txt 40
-          Emit "ANGLE BUILD (tail)" angle-build.txt 40
+          Emit "ANGLE ERROR" angle-error.txt 0
+          Emit "ANGLE BUILD (tail)" angle-build.txt 15
           Emit "ANGLE DLLS" angle-dlls.txt 0
           Emit "ANGLE AUDIT" angle-audit.txt 0
