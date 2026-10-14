@@ -120,15 +120,16 @@ jobs:
         shell: pwsh
         run: |
           cd C:\angle
-          autoninja -C out/uwp libEGL libGLESv2 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-build.txt | Select-Object -Last 60
+          autoninja -k 0 -C out/uwp libEGL libGLESv2 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-build.txt | Select-Object -Last 60
           if ($LASTEXITCODE -ne 0) {
             # Keep the compiler's own error text for the notes.
             $o = "out\uwp\siso_output"
             if (Test-Path $o) {
               $lines = Get-Content $o
-              $hit = ($lines | Select-String -Pattern "error" | Select-Object -First 1)
-              $start = if ($hit) { [Math]::Max(0, $hit.LineNumber - 15) } else { [Math]::Max(0, $lines.Count - 80) }
-              $lines[$start..([Math]::Min($lines.Count - 1, $start + 80))] | Out-File -Encoding utf8 $env:GITHUB_WORKSPACE\angle-error.txt
+              # every compiler error line (with the file it is in), without the very long command lines
+              $errs = $lines | Where-Object { $_ -match "error:|error [A-Z]+[0-9]+|undefined symbol|^FAILED:" -and $_.Length -lt 600 } | Select-Object -Unique -First 120
+              if (-not $errs) { $errs = $lines | Select-Object -Last 60 | ForEach-Object { if ($_.Length -gt 600) { $_.Substring(0, 600) } else { $_ } } }
+              $errs | Out-File -Encoding utf8 $env:GITHUB_WORKSPACE\angle-error.txt
             } else { "no siso_output; files: $((Get-ChildItem out\uwp -File).Name -join ', ')" | Out-File -Encoding utf8 $env:GITHUB_WORKSPACE\angle-error.txt }
             exit 1
           }
