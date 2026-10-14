@@ -39,6 +39,23 @@ jobs:
           gclient sync --no-history --shallow -j 8 2>&1 | Select-Object -Last 40
           if ($LASTEXITCODE -ne 0) { Write-Host "::error title=gclient sync failed::see log"; exit 1 }
 
+      - name: Hide incomplete Windows SDK versions (so the build picks a complete one)
+        shell: pwsh
+        run: |
+          $kit = "${env:ProgramFiles(x86)}\Windows Kits\10"
+          $rep = @()
+          foreach ($sub in "Include", "Lib", "bin") {
+            Get-ChildItem "$kit\$sub" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^10\.' } | ForEach-Object { $rep += "$sub\$($_.Name)" }
+          }
+          $good = Get-ChildItem "$kit\Include" -Directory | Where-Object { $_.Name -match '^10\.' -and (Test-Path "$($_.FullName)\um\windows.h") -and (Test-Path "$kit\Lib\$($_.Name)\um\x64\WindowsApp.lib") } | ForEach-Object { $_.Name }
+          $rep += "complete SDKs: $($good -join ', ')"
+          foreach ($sub in "Include", "Lib", "bin") {
+            Get-ChildItem "$kit\$sub" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^10\.' -and ($good -notcontains $_.Name) } | ForEach-Object {
+              Rename-Item $_.FullName ($_.Name + ".hidden"); $rep += "hidden: $sub\$($_.Name)"
+            }
+          }
+          $rep | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-sdk.txt
+
       - name: Configure ANGLE for Xbox apps (UWP, x64, Direct3D 11 only)
         shell: pwsh
         run: |
@@ -107,6 +124,7 @@ jobs:
             }
           }
           Emit "ANGLE REPORT" angle-report.txt 0
+          Emit "ANGLE SDK" angle-sdk.txt 0
           Emit "ANGLE GN" angle-gn.txt 40
           Emit "ANGLE BUILD (tail)" angle-build.txt 40
           Emit "ANGLE DLLS" angle-dlls.txt 0
