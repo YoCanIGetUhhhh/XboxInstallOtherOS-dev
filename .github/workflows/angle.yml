@@ -60,6 +60,18 @@ jobs:
         shell: pwsh
         run: |
           cd C:\angle
+          # Google's build asks for one exact Windows SDK version; use the complete one this machine has instead.
+          $kit = "${env:ProgramFiles(x86)}\Windows Kits\10"
+          $sdk = Get-ChildItem "$kit\Include" -Directory | Where-Object { $_.Name -match '^10\.\d+\.\d+\.\d+$' -and (Test-Path "$($_.FullName)\um\windows.h") } | Sort-Object { [version]$_.Name } | Select-Object -Last 1 -ExpandProperty Name
+          Write-Host "Using Windows SDK $sdk"
+          foreach ($f in "build\vs_toolchain.py", "build\toolchain\win\setup_toolchain.py") {
+            $c = Get-Content $f -Raw
+            $found = [regex]::Matches($c, "10\.0\.\d{5}\.0") | ForEach-Object { $_.Value } | Sort-Object -Unique
+            Write-Host "$f mentions: $($found -join ', ')"
+            foreach ($v in $found) { if ($v -ne $sdk) { $c = $c.Replace($v, $sdk) } }
+            Set-Content -NoNewline -Encoding utf8 $f $c
+            "$f : $($found -join ', ') -> $sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_WORKSPACE\angle-sdk.txt
+          }
           New-Item -ItemType Directory -Force out\uwp | Out-Null
           # Written to args.gn directly (passing quotes on the command line gets them stripped by Windows).
           @(
@@ -74,6 +86,7 @@ jobs:
             'angle_enable_swiftshader = false'
             'angle_build_tests = false'
             'angle_has_frame_capture = false'
+            'angle_libs_suffix = "_new"'
           ) | Set-Content -Encoding ascii out\uwp\args.gn
           Get-Content out\uwp\args.gn
           gn gen out/uwp 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE\angle-gn.txt
@@ -95,10 +108,10 @@ jobs:
           Write-Host "WindowsApp.lib: $lib  nm: $nm"
           & $nm -g $lib 2>$null | Out-File -Encoding utf8 windowsapp_symbols.txt
           New-Item -ItemType Directory angle-new | Out-Null
-          Copy-Item C:\angle\out\uwp\libEGL.dll, C:\angle\out\uwp\libGLESv2.dll angle-new\
+          Copy-Item C:\angle\out\uwp\libEGL*.dll, C:\angle\out\uwp\libGLESv2*.dll angle-new\
           Get-ChildItem C:\angle\out\uwp\*.dll | ForEach-Object { "$($_.Name) $([int]($_.Length/1024)) KB" } | Tee-Object -FilePath angle-dlls.txt
-          python native/uwp_audit.py angle-new\libGLESv2.dll windowsapp_symbols.txt angle-new 2>&1 | Tee-Object -FilePath angle-audit.txt
-          python native/uwp_audit.py angle-new\libEGL.dll windowsapp_symbols.txt angle-new 2>&1 | Tee-Object -FilePath angle-audit.txt -Append
+          python native/uwp_audit.py (Get-ChildItem angle-new\libGLESv2*.dll | Select-Object -First 1 -ExpandProperty FullName) windowsapp_symbols.txt angle-new 2>&1 | Tee-Object -FilePath angle-audit.txt
+          python native/uwp_audit.py (Get-ChildItem angle-new\libEGL*.dll | Select-Object -First 1 -ExpandProperty FullName) windowsapp_symbols.txt angle-new 2>&1 | Tee-Object -FilePath angle-audit.txt -Append
 
       - name: Keep the DLLs
         uses: actions/upload-artifact@v4
