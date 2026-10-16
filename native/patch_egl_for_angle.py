@@ -157,7 +157,8 @@ bool uwp_present(egl_fb *src)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glViewport(0, 0, ww, wh);
     glDisable(GL_SCISSOR_TEST);
-    glClearColor(0, 0, 0, 1);
+    /* Test colour: the empty side bars are dark blue, so it is easy to see whether the window shows anything. */
+    glClearColor(0.0f, 0.1f, 0.35f, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     if (ww > 0 && wh > 0) {
         double sx = (double)ww / src->width, sy = (double)wh / src->height;
@@ -179,11 +180,11 @@ bool uwp_present(egl_fb *src)
         static int logged;
         GLenum ge = glGetError();
         EGLBoolean ok = eglSwapBuffers(qemu_egl_display, uwp_win);
-        if (logged < 4 || ge != GL_NO_ERROR || !ok) {
-            if (logged < 12) {
+        if (logged < 4 || ge != GL_NO_ERROR || !ok || (uwp_direct_frames % 300) == 0) {
+            if (logged < 30) {
                 logged++;
-                error_report("egl: direct frame %dx%d into window %dx%d, gl error 0x%x, swap %s",
-                             src->width, src->height, ww, wh, ge,
+                error_report("egl: direct frame %ld: %dx%d into window %dx%d, gl error 0x%x, swap %s",
+                             (long)uwp_direct_frames, src->width, src->height, ww, wh, ge,
                              ok ? "ok" : qemu_egl_get_error_string());
             }
         }
