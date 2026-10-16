@@ -143,7 +143,7 @@ extern void *uwp_panel;
 extern volatile long uwp_direct_frames;
 extern volatile int uwp_direct_w, uwp_direct_h;
 void *uwp_d3d_create(void *d3d11_device);
-void uwp_d3d_present(void);
+int uwp_d3d_present(void);
 const char *uwp_d3d_error(void);
 int uwp_d3d_width(void);
 int uwp_d3d_height(void);
@@ -165,6 +165,9 @@ bool uwp_present(egl_fb *src)
 {
     EGLContext ctx = eglGetCurrentContext();
     int ww = uwp_d3d_width(), wh = uwp_d3d_height();
+    static int64_t t_total, t_draw, t_present, t_last_report;
+    static long n_frames, n_skipped;
+    int64_t t0 = g_get_monotonic_time(), t1, t2;
 
     if (!uwp_panel || uwp_win_failed || !src->framebuffer || !src->width || !src->height) {
         return false;
@@ -236,8 +239,28 @@ bool uwp_present(egl_fb *src)
             }
         }
     }
-    uwp_d3d_present();
+    t1 = g_get_monotonic_time();
+    if (!uwp_d3d_present()) {
+        n_skipped++;
+    }
+    t2 = g_get_monotonic_time();
     eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(ctx), qemu_uwp_surface(ctx), ctx);
+    /* timing report every 10 seconds: where does the time go? */
+    n_frames++;
+    t_draw += t1 - t0;
+    t_present += t2 - t1;
+    t_total += g_get_monotonic_time() - t0;
+    if (!t_last_report) {
+        t_last_report = t0;
+    }
+    if (t0 - t_last_report > 10 * 1000000 && n_frames > 0) {
+        error_report("egl: GPU direct timing: %ld frames in %.1f s, per frame: draw %.2f ms, hand-over %.2f ms, total %.2f ms; skipped %ld",
+                     n_frames, (t0 - t_last_report) / 1e6, t_draw / 1000.0 / n_frames,
+                     t_present / 1000.0 / n_frames, t_total / 1000.0 / n_frames, n_skipped);
+        t_last_report = t0;
+        n_frames = n_skipped = 0;
+        t_draw = t_present = t_total = 0;
+    }
     uwp_direct_w = src->width;
     uwp_direct_h = src->height;
     uwp_direct_frames++;

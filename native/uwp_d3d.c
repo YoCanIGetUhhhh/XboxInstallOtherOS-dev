@@ -71,7 +71,7 @@ void *uwp_d3d_create(void *d3d11_device)
     d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     d.SampleDesc.Count = 1;
     d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    d.BufferCount = 2;
+    d.BufferCount = 3;
     d.Scaling = DXGI_SCALING_STRETCH;
     d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
     d.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
@@ -98,9 +98,14 @@ void *uwp_d3d_create(void *d3d11_device)
     return g_back;
 }
 
-void uwp_d3d_present(void)
+/* Never wait for the TV: if the screen is not ready, this picture is skipped (the next one replaces it).
+   Returns 1 when shown, 0 when skipped. */
+int uwp_d3d_present(void)
 {
-    if (g_sc) IDXGISwapChain1_Present(g_sc, 0, 0);
+    HRESULT hr;
+    if (!g_sc) return 0;
+    hr = IDXGISwapChain1_Present(g_sc, 0, DXGI_PRESENT_DO_NOT_WAIT);
+    return hr == DXGI_ERROR_WAS_STILL_DRAWING ? 0 : 1;
 }
 
 /* Called by the app on its screen (UI) thread, again and again until it returns 1. */
