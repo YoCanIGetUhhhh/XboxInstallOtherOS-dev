@@ -52,10 +52,35 @@ Hold **Ctrl + Alt + Shift**, then press:
 ## Save state
 Ctrl + Alt + Shift + V stops the virtual PC, saves its memory and devices to a file, and returns to the menu. **Resume saved state** loads it again, even after the app was closed. There is one saved state at a time. It is used up when you resume it, because Linux changes the disk afterwards. It is only valid for the same app version and an unchanged disk file.
 
+## GPU mode (experimental)
+In **Settings**, press **Screen size** until it shows one of these:
+
+| Option | What it uses |
+| --- | --- |
+| GPU | Virtual graphics card drawn by the Xbox GPU, using ANGLE 2.1.13 (2016) |
+| GPU (new ANGLE) | The same, using a current ANGLE build (more graphics features, same speed) |
+
+Measured on a Series X dev kit with Debian 13 + XFCE at 800x600: glmark2 score about **8** without GPU mode, about **245-252** with it.
+
+### Get OpenGL 3.3 inside Linux (do this once per Linux install)
+The Xbox graphics layer offers OpenGL ES 3.0, so Linux reports only **OpenGL 2.1** by default and some programs refuse to start. Linux can be told to report **OpenGL 3.3** instead. Most older games and apps work fine like this; a few may draw incorrectly.
+
+1. Open a Terminal in Linux and paste this one line:
+   ```
+   echo -e "MESA_GL_VERSION_OVERRIDE=3.3\nMESA_GLSL_VERSION_OVERRIDE=330" | sudo tee -a /etc/environment
+   ```
+2. Restart Linux.
+3. Check with `glxinfo -B` (package `mesa-utils`): it should say `OpenGL version string: 3.3`.
+
+To undo it, run `sudo nano /etc/environment`, delete the two `MESA_..._OVERRIDE` lines, save and restart.
+
+This works on most distros (Debian, Ubuntu, Linux Mint, Fedora and others read `/etc/environment`).
+
 ## Good to know
 - The virtual PC stops when the app leaves the foreground (Guide button, Home). Use save state first.
 - QEMU can run once per app start; the app restarts itself when the virtual PC ends.
-- GPU drawing (Virgl through ANGLE) is experimental: choose the GPU screen option in Settings. Without it there is no GPU acceleration. The emulated CPU stays slow, so only light or old 3D is realistic.
+- GPU drawing (Virgl through ANGLE) is experimental, see **GPU mode** above. Without it there is no GPU acceleration. The emulated CPU stays slow, so only light or old 3D is realistic.
+- If the app will not open after a GPU session, delete `qemu-out.txt`, `checks.log`, `crash.txt`, `running.flag` and `screen.cfg` in LocalState with the Device Portal file explorer (your virtual disk is not touched).
 - The Linux network card can change name when virtual devices change (for example `ens3` becomes `ens4`). If the network stops working after changing settings, look at `ip a` and fix the name in `/etc/network/interfaces`.
 - Memory limit is set by the Xbox. Four CPUs or very large RAM settings can crash the app.
 
