@@ -40,6 +40,30 @@ t = load(p)
 # 3. config: off-screen surfaces
 t = must_replace(t, "EGL_SURFACE_TYPE, EGL_WINDOW_BIT,", "EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,", "surface type", count=2)
 
+# 1b. ANGLE ranks a 10-bit colour format (R10G10B10A2) first. An app window (SwapChainPanel) cannot show
+#     that, so prefer the plain 8-bit RGBA format when the library offers it.
+t = must_replace(t, """    qemu_egl_mode = gles ? DISPLAY_GL_MODE_ES : DISPLAY_GL_MODE_CORE;
+    return 0;""", """    {
+        EGLConfig cfgs[128];
+        EGLint cn = 0, i;
+        if (eglChooseConfig(qemu_egl_display, gles ? conf_att_gles : conf_att_core, cfgs, 128, &cn)) {
+            for (i = 0; i < cn; i++) {
+                EGLint r = 0, g = 0, bl = 0, a = 0;
+                eglGetConfigAttrib(qemu_egl_display, cfgs[i], EGL_RED_SIZE, &r);
+                eglGetConfigAttrib(qemu_egl_display, cfgs[i], EGL_GREEN_SIZE, &g);
+                eglGetConfigAttrib(qemu_egl_display, cfgs[i], EGL_BLUE_SIZE, &bl);
+                eglGetConfigAttrib(qemu_egl_display, cfgs[i], EGL_ALPHA_SIZE, &a);
+                if (r == 8 && g == 8 && bl == 8 && a == 8) {
+                    qemu_egl_config = cfgs[i];
+                    break;
+                }
+            }
+        }
+    }
+
+    qemu_egl_mode = gles ? DISPLAY_GL_MODE_ES : DISPLAY_GL_MODE_CORE;
+    return 0;""", "8-bit config")
+
 # 2. ES 3 context for QEMU's own drawing
 t = must_replace(t, "        EGL_CONTEXT_CLIENT_VERSION, 2,\n", "        EGL_CONTEXT_CLIENT_VERSION, 3,\n", "ES3 context")
 
