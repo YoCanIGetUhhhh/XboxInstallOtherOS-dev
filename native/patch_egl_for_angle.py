@@ -136,7 +136,18 @@ bool uwp_present(egl_fb *src)
                          qemu_egl_get_error_string());
             return false;
         }
-        error_report("egl: drawing straight into the app window (GPU direct)");
+        {
+            EGLint r = 0, g = 0, b = 0, a = 0, st = 0, cid = 0, rb = 0;
+            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_RED_SIZE, &r);
+            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_GREEN_SIZE, &g);
+            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_BLUE_SIZE, &b);
+            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_ALPHA_SIZE, &a);
+            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_SURFACE_TYPE, &st);
+            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_CONFIG_ID, &cid);
+            eglQuerySurface(qemu_egl_display, uwp_win, EGL_RENDER_BUFFER, &rb);
+            error_report("egl: drawing straight into the app window (GPU direct); config %d R%dG%dB%dA%d surface-types 0x%x render-buffer 0x%x",
+                         cid, r, g, b, a, st, rb);
+        }
     }
     if (!eglMakeCurrent(qemu_egl_display, uwp_win, uwp_win, ctx)) {
         uwp_win_failed = 1;

@@ -503,7 +503,7 @@ namespace XboxVmHost
         }
 
         // Screen size the virtual graphics card asks Linux to use. "Auto" lets Linux choose.
-        private static readonly string[] ScreenChoices = { "Auto", "1280x720", "1024x768", "800x600", "GPU", "GPU (new ANGLE)", "GPU direct (new ANGLE)" };
+        private static readonly string[] ScreenChoices = { "Auto", "1280x720", "1024x768", "800x600", "GPU", "GPU (new ANGLE)", "GPU direct (new ANGLE)", "GPU direct (old ANGLE)" };
         private static string ScreenCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "screen.cfg"); } }
         private static string VmScreen
         {
@@ -910,7 +910,7 @@ namespace XboxVmHost
             _directCount = 0;
             try
             {
-                if (VmScreen == "GPU direct (new ANGLE)")
+                if (VmScreen.StartsWith("GPU direct"))
                 {
                     if (_panelPtr == IntPtr.Zero) _panelPtr = Marshal.GetIUnknownForObject(VmPanel);
                     qemu_dll_set_panel(_panelPtr);
