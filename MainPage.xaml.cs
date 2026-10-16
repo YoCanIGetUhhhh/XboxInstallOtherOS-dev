@@ -264,6 +264,7 @@ namespace XboxVmHost
         private static extern int qemu_dll_direct_info(out int w, out int h);
 
         private int _directCount;
+        private int _framesAfterDirect;   // normal (copied) pictures that arrived after GPU direct started
         private IntPtr _panelPtr = IntPtr.Zero;
 
         [DllImport("qemu.dll", EntryPoint = "qemu_dll_main")]
@@ -908,6 +909,7 @@ namespace XboxVmHost
             Log("Step 1: handing over to QEMU...");
             // GPU direct: QEMU draws straight into VmPanel; the normal picture (VmImage) is only used until then.
             _directCount = 0;
+            _framesAfterDirect = 0;
             try
             {
                 if (VmScreen.StartsWith("GPU direct"))
@@ -1196,6 +1198,7 @@ namespace XboxVmHost
             Log("--- QEMU messages ---");
             try { Log(ReadSharedText(QemuOutPath)); } catch (Exception ex) { Log("(none: " + ex.Message + ")"); }
             Log("--- end ---");
+            if (_panelPtr != IntPtr.Zero) Log("GPU direct: " + _directCount + " pictures went straight to the screen; " + _framesAfterDirect + " normal pictures arrived after that (ignored).");
             Log("Input seen by the app: " + _dbgKeysSent + " key presses, " + _dbgMouse + " raw mouse moves, " + _dbgPtr + " window pointer moves, " + _dbgXaml + " page pointer moves (last type " + _dbgType + ").");
             Log("Restarting the app so Linux can be started again...");
             RestartAppSoon();
@@ -1269,6 +1272,8 @@ namespace XboxVmHost
             }
             int seq = _frameSeq;
             if (qemu_dll_get_frame(_frameBuf, _frameBuf.Length, out w, out h, ref seq) == 0) return;
+            // Once GPU direct has started, a late (usually black) normal picture must not cover the direct one.
+            if (_directCount > 0) { _frameSeq = seq; _framesAfterDirect++; return; }
             if (VmImage.Visibility != Visibility.Visible) VmImage.Visibility = Visibility.Visible;
             _frameSeq = seq;
             if (w <= 0 || h <= 0) return;
