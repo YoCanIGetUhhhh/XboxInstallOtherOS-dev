@@ -498,7 +498,7 @@ namespace XboxVmHost
                     }
                 }
                 catch { }
-                return "qemu64";
+                return "max";   // default from 1.2.61: same speed as qemu64 on the Xbox, runs more programs
             }
         }
 
@@ -543,7 +543,7 @@ namespace XboxVmHost
                     if (File.Exists(DiskModeCfgPath) && int.TryParse(File.ReadAllText(DiskModeCfgPath).Trim(), out v) && v >= 0 && v < DiskModeNames.Length) return v;
                 }
                 catch { }
-                return 0;
+                return 1;   // Virtio (fast) is the default from 1.2.61
             }
         }
 

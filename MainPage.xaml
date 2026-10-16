@@ -160,7 +160,7 @@
                 <TextBlock x:Name="SpeedNote" FontSize="13" FontWeight="SemiBold" Foreground="#7A3E00" TextWrapping="Wrap" Margin="0,0,0,8"/>
 
                 <Button x:Name="CpuModelButton" Content="CPU type" Style="{StaticResource MainButton}" Click="CpuModelButton_Click"/>
-                <TextBlock Text="qemu64 is the fastest and the recommended choice. Nehalem is an older, more cautious option. Haswell-noTSX (AVX2) and max (everything QEMU can do) run more programs (Wine, Lutris) but may be slower."
+                <TextBlock Text="max is the recommended choice: same speed as qemu64 on the Xbox and runs more programs (Wine, Lutris). qemu64, Nehalem and Haswell-noTSX are older, more cautious options."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="TbButton" Content="Code cache" Style="{StaticResource MainButton}" Click="TbButton_Click"/>
@@ -172,7 +172,7 @@
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="DiskModeButton" Content="Disk type" Style="{StaticResource MainButton}" Click="DiskModeButton_Click"/>
-                <TextBlock Text="IDE is the old safe type. Virtio is faster. Fast install also skips safe-writing, only for installing: a crash can corrupt the disk."
+                <TextBlock Text="Virtio is the recommended type (faster). IDE is the old, most compatible type. Fast install also skips safe-writing, only for installing: a crash can corrupt the disk."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="ScreenSizeButton" Content="Screen size" Style="{StaticResource MainButton}" Click="ScreenSizeButton_Click"/>
