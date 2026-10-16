@@ -185,6 +185,12 @@
                         Click="RamButton_Click"/>
                 <Button x:Name="NetToggleButton" Content="Network" Style="{StaticResource MainButton}"
                         Click="NetToggleButton_Click"/>
+                <Button x:Name="PcAccessButton" Content="PC access" Style="{StaticResource MainButton}"
+                        Click="PcAccessButton_Click"/>
+                <Button x:Name="SharedButton" Content="Shared folder" Style="{StaticResource MainButton}"
+                        Click="SharedButton_Click"/>
+                <TextBlock Text="Shared folder: put files in LocalState\shared with the Device Portal (up to 480 MB); Linux sees them read-only (drive label SHARED). PC access: SSH / FileZilla to this Xbox, port 2222, needs Network ON."
+                           FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
                 <Button x:Name="DiskSizeButton" Content="Disk size" Style="{StaticResource MainButton}" Click="DiskSizeButton_Click"/>
                 <Button x:Name="CreateDiskButton" Content="Create virtual disk" Style="{StaticResource CreateButton}"
                         HorizontalContentAlignment="Left" Margin="0,0,0,2" Click="CreateDiskButton_Click"/>

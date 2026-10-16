@@ -156,7 +156,7 @@ jobs:
           set -o pipefail
           mkdir -p qemu-src/build
           cd qemu-src/build
-          ../configure --cc="ccache gcc" --static --target-list=x86_64-softmmu --without-default-features --enable-tcg --enable-slirp --enable-opengl --enable-virglrenderer --disable-werror 2>&1 | tee configure.log
+          ../configure --cc="ccache gcc" --static --target-list=x86_64-softmmu --without-default-features --enable-tcg --enable-slirp --enable-opengl --enable-virglrenderer --enable-vvfat --disable-werror 2>&1 | tee configure.log
 
       - name: Build QEMU
         run: |

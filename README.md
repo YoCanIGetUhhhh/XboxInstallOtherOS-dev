@@ -77,6 +77,21 @@ To undo it, run `sudo nano /etc/environment`, delete the two `MESA_..._OVERRIDE`
 
 This works on most distros (Debian, Ubuntu, Linux Mint, Fedora and others read `/etc/environment`).
 
+## Shared folder (copy files from your PC into Linux)
+1. In Settings press **Shared folder** so it says **ON**.
+2. In the Device Portal open **File explorer** > **LocalAppData** > **Microsoft.MicrosoftEdge.XboxVmHost_xkj04xcm6e7n4** > **LocalState** > **shared** and upload your files (480 MB in total at most).
+3. Start Linux. The folder is a read-only drive labelled `SHARED`. Mount it with:
+   ```
+   sudo mkdir -p /mnt/shared
+   sudo mount -o ro LABEL=SHARED /mnt/shared
+   ```
+   (`LABEL` and `SHARED` are capitals.) Files added while Linux runs show up after the next start.
+
+## PC access (SSH / FileZilla)
+1. In Settings turn **Network** ON and **PC access** ON.
+2. Inside Linux install an SSH server once: `sudo apt install openssh-server`
+3. On your PC connect to the Xbox's IP address, port **2222**, with your Linux user name and password. In FileZilla: Host `sftp://<xbox-ip>`, Port `2222`.
+
 ## Good to know
 - The virtual PC stops when the app leaves the foreground (Guide button, Home). Use save state first.
 - QEMU can run once per app start; the app restarts itself when the virtual PC ends.

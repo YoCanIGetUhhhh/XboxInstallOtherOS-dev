@@ -35,6 +35,14 @@ namespace XboxVmHost
         private static string CrashPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "crash.txt"); } }
         private static string NetFlagPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "net.on"); } }
         private static bool NetOn { get { try { return File.Exists(NetFlagPath); } catch { return false; } } }
+        // Shared folder: LocalState\shared shows up inside Linux as a read-only drive labelled SHARED.
+        private static string SharedDir { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "shared"); } }
+        private static string SharedFlagPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "shared.on"); } }
+        private static bool SharedOn { get { try { return File.Exists(SharedFlagPath); } catch { return false; } } }
+        // PC access: forwards port 2222 on the Xbox to port 22 (SSH) inside Linux, for SSH / FileZilla (SFTP).
+        private static string PcFlagPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "pcaccess.on"); } }
+        private static bool PcOn { get { try { return File.Exists(PcFlagPath); } catch { return false; } } }
+        private const long SharedMaxBytes = 480L * 1024 * 1024;   // the shared drive is a ~500 MB FAT16 disk
 
         public MainPage()
         {
@@ -64,6 +72,8 @@ namespace XboxVmHost
             }
             catch (Exception ex) { shown = "(could not read the last log: " + ex.Message + ")"; }
             LogText.Text = string.IsNullOrEmpty(shown) ? "Ready.\n" : shown + "\n";
+            ScrollLogToEnd();
+            try { Directory.CreateDirectory(SharedDir); } catch { }
             try { VersionText.Text = "Version " + AppVersionText(); } catch { }
             RefreshStatus();
             InitVm();
@@ -115,8 +125,28 @@ namespace XboxVmHost
         private void Log(string line)
         {
             LogText.Text += line + "\n";
-            if (!string.IsNullOrWhiteSpace(line) && !line.StartsWith("===")) { try { SettingsMsg.Text = line; } catch { } }
             try { File.AppendAllText(LogPath, line + "\n"); } catch { }
+            ScrollLogToEnd();
+        }
+
+        // Settings page messages: shown under "Pick ISO file" and written to the log.
+        private void SLog(string line)
+        {
+            Log(line);
+            if (!string.IsNullOrWhiteSpace(line) && !line.StartsWith("===")) { try { SettingsMsg.Text = line; } catch { } }
+        }
+
+        // The log box always shows the newest line (scrolls after the new text has been laid out).
+        private void ScrollLogToEnd()
+        {
+            try
+            {
+                var _ = Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Low, () =>
+                {
+                    try { LogScroller.ChangeView(null, LogScroller.ExtentHeight, null, true); } catch { }
+                });
+            }
+            catch { }
         }
 
         // The penguin's pupils look toward the pointer (positions are in the penguin picture's own pixels).
@@ -276,6 +306,7 @@ namespace XboxVmHost
         private static extern int qemu_dll_direct_info(out int w, out int h);
 
         private int _directCount;
+        private int _snapW, _snapH;       // size of the last screenshot copy in GPU direct
         private int _framesAfterDirect;   // normal (copied) pictures that arrived after GPU direct started
         private IntPtr _panelPtr = IntPtr.Zero;
 
@@ -671,7 +702,8 @@ namespace XboxVmHost
                 StatusDisk.Text = !haveDisk ? "not created yet"
                     : SizeText(DiskPath) + " main disk" + (haveMedia ? " + " + SizeText(MediaPath) + " storage disk" : "");
                 StatusRam.Text = VmRamMb + " MB   (Xbox app limit " + AppLimitMb() + " MB)";
-                StatusNet.Text = NetOn ? "ON (NAT, 10.0.2.15)" : "off";
+                StatusNet.Text = (NetOn ? "ON (NAT, 10.0.2.15)" : "off") + (NetOn && PcOn ? ", PC access on port 2222" : "")
+                    + (SharedOn ? ", shared folder on" : "");
                 StatusSpeed.Text = SpeedText;
                 CpuModelButton.Content = "CPU type: " + VmCpuModel + " (press to change)";
                 TbButton.Content = "Code cache: " + VmTbMb + " MB (press to change)";
@@ -683,6 +715,8 @@ namespace XboxVmHost
                     : "Defaults are the recommended settings. Change ONE setting at a time.";
                 RamButton.Content = "Virtual RAM: " + VmRamMb + " MB (press to change)";
                 NetToggleButton.Content = NetOn ? "Network: ON (press to turn off)" : "Network: off (press to turn on)";
+                PcAccessButton.Content = PcOn ? "PC access (SSH port 2222): ON (press to turn off)" : "PC access (SSH port 2222): off (press to turn on)";
+                SharedButton.Content = SharedOn ? "Shared folder: ON (press to turn off)" : "Shared folder: off (press to turn on)";
                 BootDiskButton.IsEnabled = haveDisk && !_qemuUsed;
                 BootIsoButton.IsEnabled = iso != null && !_qemuUsed;
                 bool haveState = StateValid();
@@ -712,26 +746,26 @@ namespace XboxVmHost
             {
                 bool main = !File.Exists(DiskPath);
                 string path = main ? DiskPath : MediaPath;
-                Log(main ? "=== CREATE VIRTUAL DISK (" + gb + " GB) ===" : "=== CREATE STORAGE DISK (" + gb + " GB) ===");
+                SLog(main ? "=== CREATE VIRTUAL DISK (" + gb + " GB) ===" : "=== CREATE STORAGE DISK (" + gb + " GB) ===");
                 if (File.Exists(path))
                 {
-                    Log("Both disks already exist, so nothing was changed.");
+                    SLog("Both disks already exist, so nothing was changed.");
                     return;
                 }
                 using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
                     fs.SetLength((long)gb * 1024L * 1024L * 1024L);
                 if (main)
                 {
-                    Log("Created an empty " + gb + " GB virtual disk.");
-                    Log("Ready. Now press \"Boot from ISO\" and install Linux onto it.");
+                    SLog("Created an empty " + gb + " GB virtual disk.");
+                    SLog("Ready. Now press \"Boot from ISO\" and install Linux onto it.");
                 }
                 else
                 {
-                    Log("Created an empty " + gb + " GB storage disk. Linux will see it as a second disk (/dev/sdb).");
-                    Log("Next: press \"Start Linux from disk\", then format and mount it inside Linux.");
+                    SLog("Created an empty " + gb + " GB storage disk. Linux will see it as a second disk (/dev/sdb).");
+                    SLog("Next: press \"Start Linux from disk\", then format and mount it inside Linux.");
                 }
             }
-            catch (Exception ex) { Log("Could not create the disk: " + ex.GetType().Name + ": " + ex.Message); }
+            catch (Exception ex) { SLog("Could not create the disk: " + ex.GetType().Name + ": " + ex.Message); }
             RefreshStatus();
         }
 
@@ -769,9 +803,50 @@ namespace XboxVmHost
                 if (NetOn) File.Delete(NetFlagPath);
                 else File.WriteAllText(NetFlagPath, "on");
             }
-            catch (Exception ex) { Log("Could not change the network setting: " + ex.Message); }
+            catch (Exception ex) { SLog("Could not change the network setting: " + ex.Message); }
             RefreshStatus();
         }
+
+        private void PcAccessButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (PcOn) { File.Delete(PcFlagPath); SettingsMsg.Text = "PC access turned off."; }
+                else
+                {
+                    File.WriteAllText(PcFlagPath, "on");
+                    SettingsMsg.Text = NetOn ? "PC access on: connect to this Xbox's IP address, port 2222 (needs an SSH server inside Linux)."
+                                             : "PC access on. It only works when Network is ON too.";
+                }
+            }
+            catch (Exception ex) { SLog("Could not change the PC access setting: " + ex.Message); }
+            RefreshStatus();
+        }
+
+        private void SharedButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Directory.CreateDirectory(SharedDir);
+                if (SharedOn) { File.Delete(SharedFlagPath); SettingsMsg.Text = "Shared folder turned off."; }
+                else
+                {
+                    File.WriteAllText(SharedFlagPath, "on");
+                    SettingsMsg.Text = "Shared folder on: files in LocalState\\shared (" + SharedSizeMb() + " MB now, up to 480 MB) show up in Linux as a drive labelled SHARED.";
+                }
+            }
+            catch (Exception ex) { SLog("Could not change the shared folder setting: " + ex.Message); }
+            RefreshStatus();
+        }
+
+        private static long SharedBytes()
+        {
+            long total = 0;
+            try { foreach (var f in new DirectoryInfo(SharedDir).GetFiles("*", SearchOption.AllDirectories)) total += f.Length; } catch { }
+            return total;
+        }
+
+        private static long SharedSizeMb() { return SharedBytes() / (1024 * 1024); }
 
         private static long AppLimitMb()
         {
@@ -792,6 +867,7 @@ namespace XboxVmHost
             AddDisk(extra, DiskPath, 0, true);
             extra.AddRange(new string[] { "-boot", "order=c" });
             AddMedia(extra);
+            AddShared(extra);
             AddNetwork(extra);
             AddPointer(extra);
             StartVm("START FROM DISK (virtual RAM " + VmRamMb + " MB, app limit " + AppLimitMb() + " MB)", VmRamMb.ToString(), extra.ToArray());
@@ -813,6 +889,7 @@ namespace XboxVmHost
             if (haveDisk) AddDisk(extra, DiskPath, 0, false);
             if (haveDisk) AddMedia(extra);
             extra.AddRange(new string[] { "-cdrom", iso.FullName, "-boot", "order=d,menu=on" });
+            AddShared(extra);
             AddNetwork(extra);
             AddPointer(extra);
             StartVm("BOOT FROM ISO (" + iso.Name + ", virtual RAM " + VmRamMb + " MB, app limit " + AppLimitMb() + " MB" + (haveDisk ? ", with virtual disk" : "") + ")",
@@ -851,7 +928,35 @@ namespace XboxVmHost
         private void AddNetwork(List<string> extra)
         {
             // romfile= (empty) because the network card's boot ROM file is not packaged and is not needed here.
-            if (NetOn) extra.AddRange(new string[] { "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0,romfile=" });
+            if (!NetOn) return;
+            string nd = "user,id=n0";
+            if (PcOn)
+            {
+                nd += ",hostfwd=tcp::2222-:22";
+                Log("PC access: port 2222 on this Xbox goes to port 22 (SSH) inside Linux.");
+            }
+            extra.AddRange(new string[] { "-netdev", nd, "-device", "virtio-net-pci,netdev=n0,romfile=" });
+        }
+
+        // Shared folder: QEMU's "vvfat" shows the folder as a read-only FAT disk (label SHARED).
+        private void AddShared(List<string> extra)
+        {
+            if (!SharedOn) return;
+            try
+            {
+                Directory.CreateDirectory(SharedDir);
+                long bytes = SharedBytes();
+                if (bytes > SharedMaxBytes)
+                {
+                    Log("Shared folder NOT attached: it holds " + (bytes / (1024 * 1024)) + " MB, the limit is 480 MB. Remove some files.");
+                    return;
+                }
+                string dir = SharedDir.Replace(",", ",,");
+                extra.AddRange(new string[] { "-drive", "if=none,id=sh0,driver=vvfat,dir=" + dir + ",label=SHARED,readonly=on",
+                                              "-device", "virtio-blk-pci,drive=sh0" });
+                Log("Shared folder attached (" + (bytes / (1024 * 1024)) + " MB, read-only). In Linux: sudo mount -o ro LABEL=SHARED /mnt/shared");
+            }
+            catch (Exception ex) { Log("Shared folder NOT attached: " + ex.Message); }
         }
 
         private void StartVm(string title, string memoryMb, string[] extra)
@@ -1300,7 +1405,7 @@ namespace XboxVmHost
             int seq = _frameSeq;
             if (qemu_dll_get_frame(_frameBuf, _frameBuf.Length, out w, out h, ref seq) == 0) return;
             // Once GPU direct has started, a late (usually black) normal picture must not cover the direct one.
-            if (_directCount > 0) { _frameSeq = seq; _framesAfterDirect++; return; }
+            if (_directCount > 0) { _frameSeq = seq; if (w > 0 && h > 0) { _snapW = w; _snapH = h; } _framesAfterDirect++; return; }
             if (VmImage.Visibility != Visibility.Visible) VmImage.Visibility = Visibility.Visible;
             _frameSeq = seq;
             if (w <= 0 || h <= 0) return;
@@ -1468,6 +1573,7 @@ namespace XboxVmHost
                     if (_framesAfterDirect == before) { ShowVmNote("Screenshot failed: no picture came back"); return; }
                 }
                 int w = _lastW, h = _lastH;
+                if (_directCount > 0) { w = _snapW; h = _snapH; }
                 if (w <= 0 || h <= 0 || _frameBuf == null) { ShowVmNote("No picture to save yet"); return; }
                 byte[] copy = new byte[w * h * 4];
                 Array.Copy(_frameBuf, copy, copy.Length);
@@ -1652,26 +1758,26 @@ namespace XboxVmHost
                 StorageFile file = await picker.PickSingleFileAsync();
                 if (file == null)
                 {
-                    Log("ISO pick cancelled.");
+                    SLog("ISO pick cancelled.");
                     return;
                 }
 
                 var props = await file.GetBasicPropertiesAsync();
-                Log("Picked: " + file.Name + "  (" + (props.Size / (1024 * 1024)) + " MB)");
-                Log("Copying into the app's storage folder...");
+                SLog("Picked: " + file.Name + "  (" + (props.Size / (1024 * 1024)) + " MB)");
+                SLog("Copying into the app's storage folder...");
 
                 Stopwatch sw = Stopwatch.StartNew();
                 StorageFolder local = ApplicationData.Current.LocalFolder;
                 StorageFile copy = await file.CopyAsync(local, file.Name, NameCollisionOption.ReplaceExisting);
                 sw.Stop();
 
-                Log("Copied OK in " + sw.Elapsed.TotalSeconds.ToString("F1") + " s");
-                Log("Now at: " + copy.Path);
+                SLog("Copied OK in " + sw.Elapsed.TotalSeconds.ToString("F1") + " s");
+                SLog("Now at: " + copy.Path);
                 RefreshStatus();
             }
             catch (Exception ex)
             {
-                Log("ISO pick/copy FAILED: " + ex.GetType().Name + ": " + ex.Message);
+                SLog("ISO pick/copy FAILED: " + ex.GetType().Name + ": " + ex.Message);
             }
         }
 

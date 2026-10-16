@@ -160,6 +160,9 @@ typedef EGLBoolean (EGLAPIENTRY *uwp_qda_fn)(EGLDisplay, EGLint, EGLAttrib *);
 typedef EGLBoolean (EGLAPIENTRY *uwp_qdv_fn)(void *, EGLint, EGLAttrib *);
 static EGLSurface uwp_win = EGL_NO_SURFACE;
 static int uwp_win_failed;
+/* The context the picture was last shown with. Framebuffer objects (like blit_fb) belong to ONE context and are
+   not shared, so the screenshot copy must use this same context (1.2.58 used another one: blank image). */
+EGLContext uwp_present_ctx = EGL_NO_CONTEXT;
 
 bool uwp_present(egl_fb *src)
 {
@@ -227,6 +230,7 @@ bool uwp_present(egl_fb *src)
     glFlush();
     uwp_d3d_present(); /* skipped (not shown) when the screen is not ready yet */
     eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(ctx), qemu_uwp_surface(ctx), ctx);
+    uwp_present_ctx = ctx;
     uwp_direct_w = src->width;
     uwp_direct_h = src->height;
     uwp_direct_frames++;
@@ -285,6 +289,7 @@ t = must_replace(t, """static void egl_refresh(DisplayChangeListener *dcl)
 {
     graphic_hw_update(dcl->con);
 }""", """extern volatile int uwp_snap_req;
+extern EGLContext uwp_present_ctx;
 
 static void egl_refresh(DisplayChangeListener *dcl)
 {
@@ -296,8 +301,8 @@ static void egl_refresh(DisplayChangeListener *dcl)
         if (edpy->guest_fb.texture && edpy->blit_fb.framebuffer && edpy->ds) {
             EGLContext pc = eglGetCurrentContext();
             EGLSurface pd = eglGetCurrentSurface(EGL_DRAW), pr = eglGetCurrentSurface(EGL_READ);
-            eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(qemu_egl_rn_ctx),
-                           qemu_uwp_surface(qemu_egl_rn_ctx), qemu_egl_rn_ctx);
+            EGLContext uc = uwp_present_ctx != EGL_NO_CONTEXT ? uwp_present_ctx : qemu_egl_rn_ctx;
+            eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(uc), qemu_uwp_surface(uc), uc);
             egl_fb_read(edpy->ds, &edpy->blit_fb);
             eglMakeCurrent(qemu_egl_display, pd, pr, pc);
             dpy_gfx_update(edpy->dcl.con, 0, 0, surface_width(edpy->ds), surface_height(edpy->ds));
