@@ -260,6 +260,15 @@ namespace XboxVmHost
         [DllImport("qemu.dll", EntryPoint = "qemu_dll_set_panel")]
         private static extern void qemu_dll_set_panel(IntPtr panel);
 
+        [DllImport("qemu.dll", EntryPoint = "qemu_dll_set_panel_size")]
+        private static extern void qemu_dll_set_panel_size(int w, int h, float sx, float sy);
+
+        [DllImport("qemu.dll", EntryPoint = "qemu_dll_attach_panel")]
+        private static extern int qemu_dll_attach_panel();
+
+        private bool _panelAttached;
+        private int _attachResult;
+
         [DllImport("qemu.dll", EntryPoint = "qemu_dll_direct_info")]
         private static extern int qemu_dll_direct_info(out int w, out int h);
 
@@ -504,7 +513,7 @@ namespace XboxVmHost
         }
 
         // Screen size the virtual graphics card asks Linux to use. "Auto" lets Linux choose.
-        private static readonly string[] ScreenChoices = { "Auto", "1280x720", "1024x768", "800x600", "GPU", "GPU (new ANGLE)", "GPU direct (new ANGLE)", "GPU direct (old ANGLE)" };
+        private static readonly string[] ScreenChoices = { "Auto", "1280x720", "1024x768", "800x600", "GPU", "GPU (new ANGLE)", "GPU direct (new ANGLE)" };
         private static string ScreenCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "screen.cfg"); } }
         private static string VmScreen
         {
@@ -916,6 +925,15 @@ namespace XboxVmHost
                 {
                     if (_panelPtr == IntPtr.Zero) _panelPtr = Marshal.GetIUnknownForObject(VmPanel);
                     qemu_dll_set_panel(_panelPtr);
+                    // The screen buffer is made in real pixels (panel size x the Xbox display scale).
+                    VmGrid.Visibility = Visibility.Visible;
+                    VmGrid.UpdateLayout();
+                    double pw = VmPanel.ActualWidth, ph = VmPanel.ActualHeight;
+                    float sx = VmPanel.CompositionScaleX, sy = VmPanel.CompositionScaleY;
+                    if (pw < 16 || ph < 16) { pw = Window.Current.Bounds.Width; ph = Window.Current.Bounds.Height; }
+                    qemu_dll_set_panel_size((int)Math.Round(pw * sx), (int)Math.Round(ph * sy), sx, sy);
+                    _panelAttached = false; _attachResult = 0;
+                    Log("GPU direct: panel " + (int)pw + "x" + (int)ph + " at scale " + sx.ToString("F2") + " = " + (int)Math.Round(pw * sx) + "x" + (int)Math.Round(ph * sy) + " pixels");
                     Log("GPU direct: the picture goes straight to the screen once Linux's desktop starts.");
                 }
                 else qemu_dll_set_panel(IntPtr.Zero);
@@ -1198,6 +1216,7 @@ namespace XboxVmHost
             Log("--- QEMU messages ---");
             try { Log(ReadSharedText(QemuOutPath)); } catch (Exception ex) { Log("(none: " + ex.Message + ")"); }
             Log("--- end ---");
+            if (_panelPtr != IntPtr.Zero) Log("GPU direct: screen buffer attached to the panel: " + (_panelAttached ? "yes" : "no (code " + _attachResult + ")"));
             if (_panelPtr != IntPtr.Zero) Log("GPU direct: " + _directCount + " pictures went straight to the screen; " + _framesAfterDirect + " normal pictures arrived after that (ignored).");
             Log("Input seen by the app: " + _dbgKeysSent + " key presses, " + _dbgMouse + " raw mouse moves, " + _dbgPtr + " window pointer moves, " + _dbgXaml + " page pointer moves (last type " + _dbgType + ").");
             Log("Restarting the app so Linux can be started again...");
@@ -1258,6 +1277,11 @@ namespace XboxVmHost
         private void PullFrame()
         {
             int w, h;
+            if (_panelPtr != IntPtr.Zero && !_panelAttached)
+            {
+                // The swap chain must be attached to the panel on this (the app's screen) thread.
+                try { _attachResult = qemu_dll_attach_panel(); _panelAttached = _attachResult == 1; } catch { }
+            }
             if (_panelPtr != IntPtr.Zero)
             {
                 int dw, dh;

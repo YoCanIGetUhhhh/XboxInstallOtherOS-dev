@@ -188,6 +188,7 @@ jobs:
           gcc -O2 -c -o uwp_entry.o ../../native/uwp_entry.c
           gcc -O2 -c -o uwp_shim.o ../../native/uwp_shim.c
           gcc -O2 -c -o uwp_jit.o ../../native/uwp_jit.c
+          gcc -O2 -c -o uwp_d3d.o ../../native/uwp_d3d.c
           python ../../native/compile_like_qemu.py ../../native/uwp_display.c uwp_display.o
           # QEMU's own build left the egl-headless display out (no object file for it), so compile it here the same way.
           python ../../native/compile_like_qemu.py ../ui/egl-headless.c egl_headless.o || echo "NOTE: egl-headless.c did not compile"
@@ -199,7 +200,7 @@ jobs:
           python - <<'PYEOF'
           import re, os
           s = open("qemu-system-x86_64.exe.rsp").read()
-          s2, n = re.subn(r'(?:"-o"|-o)\s+"?qemu-system-x86_64\.exe"?', '-shared -o qemu.dll uwp_entry.o uwp_shim.o uwp_jit.o uwp_display.o', s)
+          s2, n = re.subn(r'(?:"-o"|-o)\s+"?qemu-system-x86_64\.exe"?', '-shared -o qemu.dll uwp_entry.o uwp_shim.o uwp_jit.o uwp_display.o uwp_d3d.o', s)
           print("replacements:", n)
           if n != 1:
               raise SystemExit("could not find the -o option in the response file")

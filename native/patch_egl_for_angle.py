@@ -135,95 +135,107 @@ static void uwp_read_pixels(int gx, int gy, int w, int h, uint8_t *base, int str
     uwp_swap_rb(base, stride, sx, sy, w, h);
 }
 
-/* "GPU direct": draw the finished picture straight into the app's SwapChainPanel (set by the app with
-   qemu_dll_set_panel). No read-back to memory, no CPU copies. Returns false to use the normal path. */
+/* "GPU direct": draw the finished picture straight into a screen buffer (DXGI swap chain) that the app shows in
+   its SwapChainPanel. The swap chain is made in native/uwp_d3d.c with ANGLE's own Direct3D 11 device; we draw into
+   its back buffer through an ANGLE pbuffer and present it. No read-back to memory, no CPU copies.
+   Returns false to use the normal copy path. */
 extern void *uwp_panel;
 extern volatile long uwp_direct_frames;
 extern volatile int uwp_direct_w, uwp_direct_h;
+void *uwp_d3d_create(void *d3d11_device);
+void uwp_d3d_present(void);
+const char *uwp_d3d_error(void);
+int uwp_d3d_width(void);
+int uwp_d3d_height(void);
+#ifndef EGL_DEVICE_EXT
+#define EGL_DEVICE_EXT 0x322C
+#endif
+#ifndef EGL_D3D11_DEVICE_ANGLE
+#define EGL_D3D11_DEVICE_ANGLE 0x33A1
+#endif
+#ifndef EGL_D3D_TEXTURE_ANGLE
+#define EGL_D3D_TEXTURE_ANGLE 0x33A3
+#endif
+typedef EGLBoolean (EGLAPIENTRY *uwp_qda_fn)(EGLDisplay, EGLint, EGLAttrib *);
+typedef EGLBoolean (EGLAPIENTRY *uwp_qdv_fn)(void *, EGLint, EGLAttrib *);
 static EGLSurface uwp_win = EGL_NO_SURFACE;
 static int uwp_win_failed;
 
 bool uwp_present(egl_fb *src)
 {
     EGLContext ctx = eglGetCurrentContext();
-    EGLint ww = 0, wh = 0;
+    int ww = uwp_d3d_width(), wh = uwp_d3d_height();
 
     if (!uwp_panel || uwp_win_failed || !src->framebuffer || !src->width || !src->height) {
         return false;
     }
     if (uwp_win == EGL_NO_SURFACE) {
-        uwp_win = eglCreateWindowSurface(qemu_egl_display, qemu_egl_config,
-                                         (EGLNativeWindowType)uwp_panel, NULL);
-        if (uwp_win == EGL_NO_SURFACE) {
-            uwp_win_failed = 1;
-            error_report("egl: direct screen not available (%s), using the normal copy",
+        uwp_qda_fn qda = (uwp_qda_fn)eglGetProcAddress("eglQueryDisplayAttribEXT");
+        uwp_qdv_fn qdv = (uwp_qdv_fn)eglGetProcAddress("eglQueryDeviceAttribEXT");
+        EGLAttrib edev = 0, d3d = 0;
+        void *tex;
+        EGLint att[] = { EGL_WIDTH, ww, EGL_HEIGHT, wh, EGL_NONE };
+
+        uwp_win_failed = 1; /* until everything below worked */
+        if (!qda || !qdv || !qda(qemu_egl_display, EGL_DEVICE_EXT, &edev) || !edev ||
+            !qdv((void *)edev, EGL_D3D11_DEVICE_ANGLE, &d3d) || !d3d) {
+            error_report("egl: GPU direct: could not get the Direct3D 11 device from the graphics library (%s), using the normal copy",
                          qemu_egl_get_error_string());
             return false;
         }
-        {
-            EGLint r = 0, g = 0, b = 0, a = 0, st = 0, cid = 0, rb = 0;
-            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_RED_SIZE, &r);
-            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_GREEN_SIZE, &g);
-            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_BLUE_SIZE, &b);
-            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_ALPHA_SIZE, &a);
-            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_SURFACE_TYPE, &st);
-            eglGetConfigAttrib(qemu_egl_display, qemu_egl_config, EGL_CONFIG_ID, &cid);
-            eglQuerySurface(qemu_egl_display, uwp_win, EGL_RENDER_BUFFER, &rb);
-            error_report("egl: drawing straight into the app window (GPU direct); config %d R%dG%dB%dA%d surface-types 0x%x render-buffer 0x%x",
-                         cid, r, g, b, a, st, rb);
+        tex = uwp_d3d_create((void *)d3d);
+        if (!tex) {
+            error_report("egl: GPU direct: screen buffer failed: %s; using the normal copy", uwp_d3d_error());
+            return false;
         }
+        uwp_win = eglCreatePbufferFromClientBuffer(qemu_egl_display, EGL_D3D_TEXTURE_ANGLE,
+                                                   (EGLClientBuffer)tex, qemu_egl_config, att);
+        if (uwp_win == EGL_NO_SURFACE) {
+            error_report("egl: GPU direct: could not draw into the screen buffer (%s); using the normal copy",
+                         qemu_egl_get_error_string());
+            return false;
+        }
+        uwp_win_failed = 0;
+        error_report("egl: GPU direct ready: %s", uwp_d3d_error());
     }
     if (!eglMakeCurrent(qemu_egl_display, uwp_win, uwp_win, ctx)) {
         uwp_win_failed = 1;
-        error_report("egl: direct screen make-current failed (%s), using the normal copy",
+        error_report("egl: GPU direct make-current failed (%s), using the normal copy",
                      qemu_egl_get_error_string());
         eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(ctx), qemu_uwp_surface(ctx), ctx);
         return false;
     }
-    {
-        static int interval_set;
-        if (!interval_set) {
-            interval_set = 1;
-            eglSwapInterval(qemu_egl_display, 0); /* never wait for the TV refresh inside QEMU's main loop */
-        }
-    }
-    eglQuerySurface(qemu_egl_display, uwp_win, EGL_WIDTH, &ww);
-    eglQuerySurface(qemu_egl_display, uwp_win, EGL_HEIGHT, &wh);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glViewport(0, 0, ww, wh);
     glDisable(GL_SCISSOR_TEST);
-    /* Test colour: the empty side bars are dark blue, so it is easy to see whether the window shows anything. */
-    glClearColor(0.0f, 0.1f, 0.35f, 1);
+    glClearColor(0.0f, 0.1f, 0.35f, 1); /* test colour for the empty side bars */
     glClear(GL_COLOR_BUFFER_BIT);
-    if (ww > 0 && wh > 0) {
+    {
         double sx = (double)ww / src->width, sy = (double)wh / src->height;
         double s = sx < sy ? sx : sy;
         int dw = (int)(src->width * s), dh = (int)(src->height * s);
         int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
         glBindFramebuffer(GL_READ_FRAMEBUFFER, src->framebuffer);
-        /* the picture is stored upside down for the memory copy, so flip it back for the window */
         glBlitFramebuffer(0, src->height, src->width, 0, dx, dy, dx + dw, dy + dh,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
     }
-    /* The guest picture has alpha 0 (X8R8G8B8). The app window treats alpha as transparency,
-       so make every pixel fully solid, or the picture is invisible (black). */
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glFlush();
     {
         static int logged;
         GLenum ge = glGetError();
-        EGLBoolean ok = eglSwapBuffers(qemu_egl_display, uwp_win);
-        if (logged < 4 || ge != GL_NO_ERROR || !ok || (uwp_direct_frames % 300) == 0) {
-            if (logged < 30) {
+        if (logged < 3 || ge != GL_NO_ERROR) {
+            if (logged < 20) {
                 logged++;
-                error_report("egl: direct frame %ld: %dx%d into window %dx%d, gl error 0x%x, swap %s",
-                             (long)uwp_direct_frames, src->width, src->height, ww, wh, ge,
-                             ok ? "ok" : qemu_egl_get_error_string());
+                error_report("egl: direct frame %ld: %dx%d into %dx%d, gl error 0x%x",
+                             (long)uwp_direct_frames, src->width, src->height, ww, wh, ge);
             }
         }
     }
+    uwp_d3d_present();
     eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(ctx), qemu_uwp_surface(ctx), ctx);
     uwp_direct_w = src->width;
     uwp_direct_h = src->height;
