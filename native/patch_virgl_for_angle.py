@@ -50,6 +50,17 @@ for path in ("virgl-src/src/virglrenderer.c", "virgl-src/src/vrend/vrend_winsys.
 # ---- (debug) always-on object messages: OFF for normal builds. Set UWP_VIRGL_DEBUG=1 when building to turn them on. ----
 import re as _re
 
+# The one-time host feature list (GLES version, GLSL level) is always printed: it is short and tells which
+# OpenGL version the graphics library gave us. The per-object messages stay off unless UWP_VIRGL_DEBUG=1.
+feat = 0
+for path in glob.glob("virgl-src/src/vrend/*.c"):
+    text = open(path, encoding="utf-8", errors="replace").read()
+    new_text, n = _re.subn(r"VREND_DEBUG\(\s*dbg_features\s*,\s*[A-Za-z_0-9>\-\.\(\)]+\s*,\s*", "virgl_error(", text)
+    if n:
+        open(path, "w", encoding="utf-8", newline="\n").write(new_text)
+        feat += n
+report.append("feature messages turned on: %d" % feat)
+
 if os.environ.get("UWP_VIRGL_DEBUG") == "1":
     prints = 0
     for path in glob.glob("virgl-src/src/vrend/*.c"):

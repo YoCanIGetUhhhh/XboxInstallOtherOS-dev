@@ -136,4 +136,21 @@ for p in ("ui/egl-context.c", "ui/egl-headless.c"):
         sys.exit("PATCH FAILED (%s make current): expected 1, found %d" % (p, n))
     save(p, t)
 
+# Log which OpenGL ES versions the renderer asks for and whether the graphics library agrees (first few only).
+p = "ui/egl-context.c"
+t = load(p)
+t = must_replace(t, """                          gles ? ctx_att_gles : ctx_att_core);
+   return ctx;""", """                          gles ? ctx_att_gles : ctx_att_core);
+   {
+       static int logged;
+       if (logged < 8) {
+           logged++;
+           error_report("egl: context %s %d.%d %s", gles ? "ES" : "GL",
+                        params->major_ver, params->minor_ver,
+                        ctx ? "created" : "refused");
+       }
+   }
+   return ctx;""", "context log")
+save(p, t)
+
 print("EGL patches for ANGLE applied")
