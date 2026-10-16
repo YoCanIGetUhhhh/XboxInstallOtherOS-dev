@@ -1189,6 +1189,13 @@ namespace XboxVmHost
         {
             if (_saving || _stopAsked || !_vmActive || !_gotFrame || _resuming) { if (_resuming) ShowVmNote("Wait until the virtual PC has finished loading"); return; }
             if (_curArgs == null) return;
+            // The GPU screens (virgl) cannot be saved by QEMU ("virgl is not yet migratable"). Say so instead of freezing.
+            if (Array.Exists(_curArgs, a => a.Contains("virtio-vga-gl")))
+            {
+                try { File.AppendAllText(LogPath, "Save state refused: not possible with a GPU screen mode.\n"); } catch { }
+                ShowVmNote("Save state does not work in GPU screen modes. Pick a normal screen size in Settings to use it.");
+                return;
+            }
             _saving = true;
             VmStatus.Text = "Saving the state... please wait. The picture will freeze.";
             string path = StatePath;
@@ -1199,14 +1206,19 @@ namespace XboxVmHost
                 {
                     DeleteState();
                     if (Hmp("stop", 20000) == null) { result = "could not pause the virtual PC"; return; }
-                    if (Hmp("migrate -d file:" + path, 20000) == null) { result = "QEMU did not answer"; Hmp("cont", 5000); return; }
+                    string mr = Hmp("migrate -d file:" + path, 20000);
+                    if (mr == null) { result = "QEMU did not answer"; Hmp("cont", 5000); return; }
+                    if (mr.Contains("Error")) { result = "QEMU refused: " + mr.Trim(); Hmp("cont", 5000); return; }
                     DateTime t0 = DateTime.UtcNow;
+                    int noStatus = 0;
                     while (true)
                     {
                         System.Threading.Thread.Sleep(400);
                         string st = Hmp("info migrate", 10000);
                         if (st == null) { result = "QEMU stopped answering"; return; }
                         if (st.Contains("Migration status: completed")) break;
+                        // No save running at all (it was refused): stop asking and carry on.
+                        if (!st.Contains("Migration status") && ++noStatus >= 5) { result = "QEMU did not start saving: " + st.Replace("\r", " ").Replace("\n", " ").Trim(); Hmp("cont", 5000); return; }
                         if (st.Contains("Migration status: failed") || st.Contains("Migration status: cancelled"))
                         {
                             result = "QEMU reported: " + st.Replace("\r", " ").Replace("\n", " ");
