@@ -426,7 +426,7 @@ namespace XboxVmHost
         // =====================================================================
         private static readonly string[] CpuChoices = { "qemu64", "Nehalem" };
         private static readonly int[] TbChoices = { 64, 128, 256 };
-        private static readonly int[] CpuCountChoices = { 1, 2 };
+        private static readonly int[] CpuCountChoices = { 1, 2, 3, 4 };
         private static string CpuCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "cpu.cfg"); } }
         private static string TbCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "tb.cfg"); } }
         private static string SmpCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "smp.cfg"); } }

@@ -78,6 +78,36 @@ static void uwp_swap_rb(uint8_t *base, int stride, int x, int y, int w, int h)
         }
     }
 }
+
+/* Copy the picture from the GPU. If the graphics library can hand it over in BGRA order
+   (GL_EXT_read_format_bgra), the GPU does the colour swap and the CPU loop above is skipped. */
+static int uwp_bgra_state = -1; /* -1 not tried yet, 1 BGRA works, 0 RGBA + CPU swap */
+static void uwp_read_pixels(int gx, int gy, int w, int h, uint8_t *base, int stride, int sx, int sy)
+{
+    uint8_t *p = base + (size_t)sx * 4;
+
+    if (uwp_bgra_state < 0) {
+        while (glGetError() != GL_NO_ERROR) {
+        }
+        if (!epoxy_has_gl_extension("GL_EXT_read_format_bgra")) {
+            uwp_bgra_state = 0;
+            error_report("egl: screen copy uses RGBA + CPU colour swap (no GL_EXT_read_format_bgra)");
+        }
+    }
+    if (uwp_bgra_state != 0) {
+        glReadPixels(gx, gy, w, h, GL_BGRA_EXT, GL_UNSIGNED_BYTE, p);
+        if (uwp_bgra_state < 0) {
+            uwp_bgra_state = (glGetError() == GL_NO_ERROR) ? 1 : 0;
+            error_report("egl: screen copy uses %s", uwp_bgra_state ?
+                         "BGRA from the GPU (no CPU colour swap)" : "RGBA + CPU colour swap (BGRA read refused)");
+        }
+        if (uwp_bgra_state == 1) {
+            return;
+        }
+    }
+    glReadPixels(gx, gy, w, h, GL_RGBA, GL_UNSIGNED_BYTE, p);
+    uwp_swap_rb(base, stride, sx, sy, w, h);
+}
 '''
 marker = "void egl_fb_setup_for_tex("
 t = must_replace(t, marker, helper.lstrip("\n") + "\n" + marker, "insert helpers")
@@ -92,28 +122,16 @@ t = must_replace(
     t,
     "    glReadPixels(0, 0, surface_width(dst), surface_height(dst),\n"
     "                 GL_BGRA, GL_UNSIGNED_BYTE, surface_data(dst));\n",
-    "    glReadPixels(0, 0, surface_width(dst), surface_height(dst),\n"
-    "                 GL_RGBA, GL_UNSIGNED_BYTE, surface_data(dst));\n"
-    "    uwp_swap_rb(surface_data(dst), surface_stride(dst), 0, 0,\n"
-    "                surface_width(dst), surface_height(dst));\n",
+    "    uwp_read_pixels(0, 0, surface_width(dst), surface_height(dst),\n"
+    "                    surface_data(dst), surface_stride(dst), 0, 0);\n",
     "read pixels",
 )
 t = must_replace(
     t,
     "    glReadPixels(x, y, w, h,\n"
     "                 GL_BGRA, GL_UNSIGNED_BYTE, surface_data(dst) + x * 4);\n",
-    "    glReadPixels(x, y, w, h,\n"
-    "                 GL_RGBA, GL_UNSIGNED_BYTE, surface_data(dst) + x * 4);\n"
-    "    uwp_swap_rb(surface_data(dst), surface_stride(dst), x, y, w, h);\n",
+    "    uwp_read_pixels(x, y, w, h, surface_data(dst), surface_stride(dst), x, 0);\n",
     "read pixels rect",
-)
-
-# read_rect reads rows starting at y but the original passes the buffer start + x*4 only
-# (the GL pack offset is not applied); keep QEMU's behaviour but make the swap match it.
-# (QEMU's own code: PACK_ROW_LENGTH + pointer at x; rows start at the top of the buffer.)
-t = t.replace(
-    "uwp_swap_rb(surface_data(dst), surface_stride(dst), x, y, w, h);",
-    "uwp_swap_rb(surface_data(dst), surface_stride(dst), x, 0, w, h);",
 )
 
 pat = re.compile(r"eglMakeCurrent\(qemu_egl_display,\s*EGL_NO_SURFACE,\s*EGL_NO_SURFACE,\s*(\w+)\)")
