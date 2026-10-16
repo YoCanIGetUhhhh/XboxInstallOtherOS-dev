@@ -208,7 +208,7 @@ bool uwp_present(egl_fb *src)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glViewport(0, 0, ww, wh);
     glDisable(GL_SCISSOR_TEST);
-    glClearColor(0.0f, 0.1f, 0.35f, 1); /* test colour for the empty side bars */
+    glClearColor(0, 0, 0, 1); /* black side bars */
     glClear(GL_COLOR_BUFFER_BIT);
     {
         double sx = (double)ww / src->width, sy = (double)wh / src->height;
@@ -216,7 +216,8 @@ bool uwp_present(egl_fb *src)
         int dw = (int)(src->width * s), dh = (int)(src->height * s);
         int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
         glBindFramebuffer(GL_READ_FRAMEBUFFER, src->framebuffer);
-        glBlitFramebuffer(0, src->height, src->width, 0, dx, dy, dx + dw, dy + dh,
+        /* Into the swap chain's buffer the picture goes the same way up as it is stored (no flip). */
+        glBlitFramebuffer(0, 0, src->width, src->height, dx, dy, dx + dw, dy + dh,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
     }
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
