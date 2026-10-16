@@ -42,7 +42,8 @@ namespace XboxVmHost
         // PC access: forwards port 2222 on the Xbox to port 22 (SSH) inside Linux, for SSH / FileZilla (SFTP).
         private static string PcFlagPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "pcaccess.on"); } }
         private static bool PcOn { get { try { return File.Exists(PcFlagPath); } catch { return false; } } }
-        private const long SharedMaxBytes = 480L * 1024 * 1024;   // the shared drive is a ~500 MB FAT16 disk
+        private const long SharedSmallBytes = 480L * 1024 * 1024;  // up to here: the normal ~500 MB FAT16 drive (as in 1.2.59)
+        private const long SharedMaxBytes = 1950L * 1024 * 1024;   // up to here: the big ~2 GB FAT16 drive (vvfat big=on, our patch)
 
         public MainPage()
         {
@@ -477,7 +478,7 @@ namespace XboxVmHost
         // Settings: CPU type, code cache size, number of CPUs, disk type, screen size.
         // Each is remembered in its own small file. Defaults are the settings that are known to work.
         // =====================================================================
-        private static readonly string[] CpuChoices = { "qemu64", "Nehalem" };
+        private static readonly string[] CpuChoices = { "qemu64", "Nehalem", "Haswell-noTSX", "max" };
         private static readonly int[] TbChoices = { 64, 128, 256 };
         private static readonly int[] CpuCountChoices = { 1, 2, 3, 4 };
         private static string CpuCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "cpu.cfg"); } }
@@ -832,7 +833,7 @@ namespace XboxVmHost
                 else
                 {
                     File.WriteAllText(SharedFlagPath, "on");
-                    SettingsMsg.Text = "Shared folder on: files in LocalState\\shared (" + SharedSizeMb() + " MB now, up to 480 MB) show up in Linux as a drive labelled SHARED.";
+                    SettingsMsg.Text = "Shared folder on: files in LocalState\\shared (" + SharedSizeMb() + " MB now, up to 1950 MB) show up in Linux as a drive labelled SHARED.";
                 }
             }
             catch (Exception ex) { SLog("Could not change the shared folder setting: " + ex.Message); }
@@ -928,6 +929,7 @@ namespace XboxVmHost
         private void AddNetwork(List<string> extra)
         {
             // romfile= (empty) because the network card's boot ROM file is not packaged and is not needed here.
+            // addr=0x10: a fixed slot, so Linux always names the card ens16 (it no longer changes when disks are added).
             if (!NetOn) return;
             string nd = "user,id=n0";
             if (PcOn)
@@ -935,7 +937,7 @@ namespace XboxVmHost
                 nd += ",hostfwd=tcp::2222-:22";
                 Log("PC access: port 2222 on this Xbox goes to port 22 (SSH) inside Linux.");
             }
-            extra.AddRange(new string[] { "-netdev", nd, "-device", "virtio-net-pci,netdev=n0,romfile=" });
+            extra.AddRange(new string[] { "-netdev", nd, "-device", "virtio-net-pci,netdev=n0,romfile=,addr=0x10" });
         }
 
         // Shared folder: QEMU's "vvfat" shows the folder as a read-only FAT disk (label SHARED).
@@ -948,11 +950,12 @@ namespace XboxVmHost
                 long bytes = SharedBytes();
                 if (bytes > SharedMaxBytes)
                 {
-                    Log("Shared folder NOT attached: it holds " + (bytes / (1024 * 1024)) + " MB, the limit is 480 MB. Remove some files.");
+                    Log("Shared folder NOT attached: it holds " + (bytes / (1024 * 1024)) + " MB, the limit is 1950 MB. Remove some files.");
                     return;
                 }
                 string dir = SharedDir.Replace(",", ",,");
-                extra.AddRange(new string[] { "-drive", "if=none,id=sh0,driver=vvfat,dir=" + dir + ",label=SHARED,readonly=on",
+                string big = bytes > SharedSmallBytes ? ",big=on" : "";
+                extra.AddRange(new string[] { "-drive", "if=none,id=sh0,driver=vvfat,dir=" + dir + ",label=SHARED,readonly=on" + big,
                                               "-device", "virtio-blk-pci,drive=sh0" });
                 Log("Shared folder attached (" + (bytes / (1024 * 1024)) + " MB, read-only). In Linux: sudo mount -o ro LABEL=SHARED /mnt/shared");
             }

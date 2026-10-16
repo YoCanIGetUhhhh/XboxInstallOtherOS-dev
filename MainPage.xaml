@@ -160,7 +160,7 @@
                 <TextBlock x:Name="SpeedNote" FontSize="13" FontWeight="SemiBold" Foreground="#7A3E00" TextWrapping="Wrap" Margin="0,0,0,8"/>
 
                 <Button x:Name="CpuModelButton" Content="CPU type" Style="{StaticResource MainButton}" Click="CpuModelButton_Click"/>
-                <TextBlock Text="qemu64 is the fastest and the recommended choice. Nehalem is an older, more cautious option."
+                <TextBlock Text="qemu64 is the fastest and the recommended choice. Nehalem is an older, more cautious option. Haswell-noTSX (AVX2) and max (everything QEMU can do) run more programs (Wine, Lutris) but may be slower."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="TbButton" Content="Code cache" Style="{StaticResource MainButton}" Click="TbButton_Click"/>
@@ -189,7 +189,7 @@
                         Click="PcAccessButton_Click"/>
                 <Button x:Name="SharedButton" Content="Shared folder" Style="{StaticResource MainButton}"
                         Click="SharedButton_Click"/>
-                <TextBlock Text="Shared folder: put files in LocalState\shared with the Device Portal (up to 480 MB); Linux sees them read-only (drive label SHARED). PC access: SSH / FileZilla to this Xbox, port 2222, needs Network ON."
+                <TextBlock Text="Shared folder: put files in LocalState\shared with the Device Portal (up to 1950 MB); Linux sees them read-only (drive label SHARED). PC access: SSH / FileZilla to this Xbox, port 2222, needs Network ON."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
                 <Button x:Name="DiskSizeButton" Content="Disk size" Style="{StaticResource MainButton}" Click="DiskSizeButton_Click"/>
                 <Button x:Name="CreateDiskButton" Content="Create virtual disk" Style="{StaticResource CreateButton}"

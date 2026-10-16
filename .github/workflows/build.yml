@@ -120,6 +120,7 @@ jobs:
         run: |
           set -e
           python native/patch_egl_for_angle.py
+          python native/patch_vvfat_big.py
 
       - name: Let QEMU's code generator use the memory calls an Xbox app is allowed to use
         run: |

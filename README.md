@@ -79,7 +79,7 @@ This works on most distros (Debian, Ubuntu, Linux Mint, Fedora and others read `
 
 ## Shared folder (copy files from your PC into Linux)
 1. In Settings press **Shared folder** so it says **ON**.
-2. In the Device Portal open **File explorer** > **LocalAppData** > **Microsoft.MicrosoftEdge.XboxVmHost_xkj04xcm6e7n4** > **LocalState** > **shared** and upload your files (480 MB in total at most).
+2. In the Device Portal open **File explorer** > **LocalAppData** > **Microsoft.MicrosoftEdge.XboxVmHost_xkj04xcm6e7n4** > **LocalState** > **shared** and upload your files (1950 MB in total at most).
 3. Start Linux. The folder is a read-only drive labelled `SHARED`. Mount it with:
    ```
    sudo mkdir -p /mnt/shared
@@ -93,6 +93,8 @@ This works on most distros (Debian, Ubuntu, Linux Mint, Fedora and others read `
 3. On your PC connect to the Xbox's IP address, port **2222**, with your Linux user name and password. In FileZilla: Host `sftp://<xbox-ip>`, Port `2222`.
 
 ## Good to know
+- From 1.2.60 the network card always sits in the same slot, so Linux names it `ens16`. After updating, put `ens16` in `/etc/network/interfaces` once.
+- CPU types `Haswell-noTSX` and `max` (Settings) run more programs (Wine, Lutris) but can be slower than `qemu64`.
 - The virtual PC stops when the app leaves the foreground (Guide button, Home). Use save state first.
 - QEMU can run once per app start; the app restarts itself when the virtual PC ends.
 - GPU drawing (Virgl through ANGLE) is experimental, see **GPU mode** above. Without it there is no GPU acceleration. The emulated CPU stays slow, so only light or old 3D is realistic.
