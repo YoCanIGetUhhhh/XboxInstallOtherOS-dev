@@ -911,9 +911,17 @@ namespace XboxVmHost
             _havePos = false; _havePosX = false; _gotCore = false; _gotRawMouse = false;
             _debugOn = false; VmDebug.Visibility = _debugOn ? Visibility.Visible : Visibility.Collapsed;
 
+            bool gpuMode = VmScreen.StartsWith("GPU");
             _vmThread = new Thread(() =>
             {
                 try { File.AppendAllText(LogPath, "Step 2: QEMU thread started\n"); } catch { }
+                // This thread becomes QEMU's main loop, which does all the GPU work. In GPU mode it goes ahead of the
+                // virtual CPU threads, so graphics do not wait behind them.
+                if (gpuMode)
+                {
+                    try { Thread.CurrentThread.Priority = ThreadPriority.AboveNormal; File.AppendAllText(LogPath, "GPU mode: QEMU main loop priority set to AboveNormal\n"); }
+                    catch (Exception ex) { try { File.AppendAllText(LogPath, "Could not raise the main loop priority: " + ex.Message + "\n"); } catch { } }
+                }
                 try { _vmResult = qemu_dll_main(outp, args.Length, argv); }
                 catch (Exception ex) { _vmResult = -998; try { File.AppendAllText(LogPath, "QEMU call threw: " + ex.GetType().Name + ": " + ex.Message + "\n"); } catch { } }
                 try { File.AppendAllText(LogPath, "Step 3: QEMU returned code " + _vmResult + "\n"); } catch { }
