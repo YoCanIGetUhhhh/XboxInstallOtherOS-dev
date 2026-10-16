@@ -405,7 +405,7 @@ namespace XboxVmHost
                         return (v > 640 && AppLimitMb() < 1500) ? 640 : v;   // big sizes only when the Xbox allows them
                 }
                 catch { }
-                return 640;
+                return AppLimitMb() >= 4500 ? 3072 : 640;   // 3072 MB when the Xbox gives the app 5120 MB
             }
         }
 
@@ -472,7 +472,7 @@ namespace XboxVmHost
                     if (File.Exists(SmpCfgPath) && int.TryParse(File.ReadAllText(SmpCfgPath).Trim(), out v) && Array.IndexOf(CpuCountChoices, v) >= 0) return v;
                 }
                 catch { }
-                return 2;
+                return 4;   // measured best on a Series X: 4 CPUs about 40% faster than 2, graphics unchanged
             }
         }
 
@@ -510,7 +510,7 @@ namespace XboxVmHost
                     }
                 }
                 catch { }
-                return "Auto";
+                return "GPU (new ANGLE)";
             }
         }
 
