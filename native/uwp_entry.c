@@ -17,6 +17,18 @@ extern void qemu_system_shutdown_request(int reason);
 
 __declspec(dllexport) int qemu_dll_ping(void) { return 777; }
 
+/* GPU direct: the app's SwapChainPanel (as an IUnknown pointer) and how many pictures went straight to it. */
+void *uwp_panel;
+volatile long uwp_direct_frames;
+volatile int uwp_direct_w, uwp_direct_h;
+__declspec(dllexport) void qemu_dll_set_panel(void *panel) { uwp_panel = panel; }
+__declspec(dllexport) int qemu_dll_direct_info(int *w, int *h)
+{
+    if (w) *w = uwp_direct_w;
+    if (h) *h = uwp_direct_h;
+    return (int)uwp_direct_frames;
+}
+
 /* Asks a running QEMU to shut down cleanly (5 = "host-ui", the same as closing its window).
    Safe to call from a different thread than the one running qemu_dll_main. */
 __declspec(dllexport) void qemu_dll_stop(void) { qemu_system_shutdown_request(5); }

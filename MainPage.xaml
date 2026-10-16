@@ -207,6 +207,7 @@
 
         <!-- The virtual PC's screen. Shown full-screen while a virtual PC is running. -->
         <Grid x:Name="VmGrid" Visibility="Collapsed" Background="Black">
+            <SwapChainPanel x:Name="VmPanel"/>
             <Image x:Name="VmImage" Stretch="Uniform"/>
             <TextBlock x:Name="VmDebug" Visibility="Collapsed" Foreground="#FFEB3B" FontSize="16" FontFamily="Consolas"
                        Margin="8,4" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False"/>

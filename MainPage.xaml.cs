@@ -257,6 +257,15 @@ namespace XboxVmHost
         [DllImport("api-ms-win-core-processenvironment-l1-1-0.dll", EntryPoint = "SetEnvironmentVariableW", CharSet = CharSet.Unicode)]
         private static extern bool SetEnvVar(string name, string value);
 
+        [DllImport("qemu.dll", EntryPoint = "qemu_dll_set_panel")]
+        private static extern void qemu_dll_set_panel(IntPtr panel);
+
+        [DllImport("qemu.dll", EntryPoint = "qemu_dll_direct_info")]
+        private static extern int qemu_dll_direct_info(out int w, out int h);
+
+        private int _directCount;
+        private IntPtr _panelPtr = IntPtr.Zero;
+
         [DllImport("qemu.dll", EntryPoint = "qemu_dll_main")]
         private static extern int qemu_dll_main(IntPtr outfile, int argc, IntPtr argv);
 
@@ -494,7 +503,7 @@ namespace XboxVmHost
         }
 
         // Screen size the virtual graphics card asks Linux to use. "Auto" lets Linux choose.
-        private static readonly string[] ScreenChoices = { "Auto", "1280x720", "1024x768", "800x600", "GPU", "GPU (new ANGLE)" };
+        private static readonly string[] ScreenChoices = { "Auto", "1280x720", "1024x768", "800x600", "GPU", "GPU (new ANGLE)", "GPU direct (new ANGLE)" };
         private static string ScreenCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "screen.cfg"); } }
         private static string VmScreen
         {
@@ -897,7 +906,20 @@ namespace XboxVmHost
             try { File.WriteAllText(FlagPath, title + "\nCommand: " + cmd + "\nStarted: " + DateTime.Now.ToString("HH:mm:ss") + "\n"); } catch { }
             Log("Command: " + cmd);
             Log("Step 1: handing over to QEMU...");
-            try { SetEnvVar("UWP_ANGLE_SUFFIX", VmScreen == "GPU (new ANGLE)" ? "_new" : null); } catch (Exception ex) { Log("Could not choose the ANGLE files: " + ex.Message); }
+            // GPU direct: QEMU draws straight into VmPanel; the normal picture (VmImage) is only used until then.
+            _directCount = 0;
+            try
+            {
+                if (VmScreen == "GPU direct (new ANGLE)")
+                {
+                    if (_panelPtr == IntPtr.Zero) _panelPtr = Marshal.GetIUnknownForObject(VmPanel);
+                    qemu_dll_set_panel(_panelPtr);
+                    Log("GPU direct: the picture goes straight to the screen once Linux's desktop starts.");
+                }
+                else qemu_dll_set_panel(IntPtr.Zero);
+            }
+            catch (Exception ex) { Log("GPU direct not available: " + ex.Message); }
+            try { SetEnvVar("UWP_ANGLE_SUFFIX", VmScreen.Contains("new ANGLE") ? "_new" : null); } catch (Exception ex) { Log("Could not choose the ANGLE files: " + ex.Message); }
 
             if (_frameBuf == null) _frameBuf = new byte[1280 * 1024 * 4];
             _frameSeq = 0;
@@ -929,6 +951,7 @@ namespace XboxVmHost
             }, 16 * 1024 * 1024);
 
             VmImage.Source = null;
+            VmImage.Visibility = Visibility.Visible;
             VmStatus.Text = "Starting the virtual PC...";
             MainGrid.Visibility = Visibility.Collapsed;
             CreditBox.Visibility = Visibility.Collapsed;
@@ -1232,8 +1255,21 @@ namespace XboxVmHost
         private void PullFrame()
         {
             int w, h;
+            if (_panelPtr != IntPtr.Zero)
+            {
+                int dw, dh;
+                int n = qemu_dll_direct_info(out dw, out dh);
+                if (n != _directCount && dw > 0 && dh > 0)
+                {
+                    _directCount = n;
+                    _lastW = dw; _lastH = dh;   // the mouse maps to the picture QEMU shows directly
+                    if (VmImage.Visibility != Visibility.Collapsed) VmImage.Visibility = Visibility.Collapsed;
+                    if (!_gotFrame) { _gotFrame = true; if (!_stopAsked) VmStatus.Text = ""; }
+                }
+            }
             int seq = _frameSeq;
             if (qemu_dll_get_frame(_frameBuf, _frameBuf.Length, out w, out h, ref seq) == 0) return;
+            if (VmImage.Visibility != Visibility.Visible) VmImage.Visibility = Visibility.Visible;
             _frameSeq = seq;
             if (w <= 0 || h <= 0) return;
             _lastW = w; _lastH = h;

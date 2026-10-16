@@ -38,7 +38,7 @@ p = "ui/egl-helpers.c"
 t = load(p)
 
 # 3. config: off-screen surfaces
-t = must_replace(t, "EGL_SURFACE_TYPE, EGL_WINDOW_BIT,", "EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,", "surface type", count=2)
+t = must_replace(t, "EGL_SURFACE_TYPE, EGL_WINDOW_BIT,", "EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,", "surface type", count=2)
 
 # 2. ES 3 context for QEMU's own drawing
 t = must_replace(t, "        EGL_CONTEXT_CLIENT_VERSION, 2,\n", "        EGL_CONTEXT_CLIENT_VERSION, 3,\n", "ES3 context")
@@ -110,6 +110,72 @@ static void uwp_read_pixels(int gx, int gy, int w, int h, uint8_t *base, int str
     glReadPixels(gx, gy, w, h, GL_RGBA, GL_UNSIGNED_BYTE, p);
     uwp_swap_rb(base, stride, sx, sy, w, h);
 }
+
+/* "GPU direct": draw the finished picture straight into the app's SwapChainPanel (set by the app with
+   qemu_dll_set_panel). No read-back to memory, no CPU copies. Returns false to use the normal path. */
+extern void *uwp_panel;
+extern volatile long uwp_direct_frames;
+extern volatile int uwp_direct_w, uwp_direct_h;
+static EGLSurface uwp_win = EGL_NO_SURFACE;
+static int uwp_win_failed;
+
+bool uwp_present(egl_fb *src)
+{
+    EGLContext ctx = eglGetCurrentContext();
+    EGLint ww = 0, wh = 0;
+
+    if (!uwp_panel || uwp_win_failed || !src->framebuffer || !src->width || !src->height) {
+        return false;
+    }
+    if (uwp_win == EGL_NO_SURFACE) {
+        uwp_win = eglCreateWindowSurface(qemu_egl_display, qemu_egl_config,
+                                         (EGLNativeWindowType)uwp_panel, NULL);
+        if (uwp_win == EGL_NO_SURFACE) {
+            uwp_win_failed = 1;
+            error_report("egl: direct screen not available (%s), using the normal copy",
+                         qemu_egl_get_error_string());
+            return false;
+        }
+        error_report("egl: drawing straight into the app window (GPU direct)");
+    }
+    if (!eglMakeCurrent(qemu_egl_display, uwp_win, uwp_win, ctx)) {
+        uwp_win_failed = 1;
+        error_report("egl: direct screen make-current failed (%s), using the normal copy",
+                     qemu_egl_get_error_string());
+        eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(ctx), qemu_uwp_surface(ctx), ctx);
+        return false;
+    }
+    {
+        static int interval_set;
+        if (!interval_set) {
+            interval_set = 1;
+            eglSwapInterval(qemu_egl_display, 0); /* never wait for the TV refresh inside QEMU's main loop */
+        }
+    }
+    eglQuerySurface(qemu_egl_display, uwp_win, EGL_WIDTH, &ww);
+    eglQuerySurface(qemu_egl_display, uwp_win, EGL_HEIGHT, &wh);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glViewport(0, 0, ww, wh);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (ww > 0 && wh > 0) {
+        double sx = (double)ww / src->width, sy = (double)wh / src->height;
+        double s = sx < sy ? sx : sy;
+        int dw = (int)(src->width * s), dh = (int)(src->height * s);
+        int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, src->framebuffer);
+        /* the picture is stored upside down for the memory copy, so flip it back for the window */
+        glBlitFramebuffer(0, src->height, src->width, 0, dx, dy, dx + dw, dy + dh,
+                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    }
+    eglSwapBuffers(qemu_egl_display, uwp_win);
+    eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(ctx), qemu_uwp_surface(ctx), ctx);
+    uwp_direct_w = src->width;
+    uwp_direct_h = src->height;
+    uwp_direct_frames++;
+    return true;
+}
 '''
 marker = "void egl_fb_setup_for_tex("
 t = must_replace(t, marker, helper.lstrip("\n") + "\n" + marker, "insert helpers")
@@ -145,7 +211,7 @@ save(p, t)
 # ---------- header ----------
 p = "include/ui/egl-helpers.h"
 t = load(p)
-t = must_replace(t, "bool egl_init(", "EGLSurface qemu_uwp_surface(EGLContext ctx);\nbool egl_init(", "header")
+t = must_replace(t, "bool egl_init(", "EGLSurface qemu_uwp_surface(EGLContext ctx);\nbool uwp_present(egl_fb *src);\nbool egl_init(", "header")
 save(p, t)
 
 # ---------- ui/egl-context.c and ui/egl-headless.c ----------
@@ -155,6 +221,17 @@ for p in ("ui/egl-context.c", "ui/egl-headless.c"):
     if n != 1:
         sys.exit("PATCH FAILED (%s make current): expected 1, found %d" % (p, n))
     save(p, t)
+
+# GPU direct: show the picture in the app window instead of copying it to memory.
+p = "ui/egl-headless.c"
+t = load(p)
+t = must_replace(t, """    egl_fb_read(edpy->ds, &edpy->blit_fb);
+    dpy_gfx_update(edpy->dcl.con, x, y, w, h);""", """    if (uwp_present(&edpy->blit_fb)) {
+        return;
+    }
+    egl_fb_read(edpy->ds, &edpy->blit_fb);
+    dpy_gfx_update(edpy->dcl.con, x, y, w, h);""", "direct present")
+save(p, t)
 
 # Log which OpenGL ES versions the renderer asks for and whether the graphics library agrees (first few only).
 p = "ui/egl-context.c"
