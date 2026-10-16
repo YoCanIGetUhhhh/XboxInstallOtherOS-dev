@@ -81,7 +81,9 @@ static void uwp_swap_rb(uint8_t *base, int stride, int x, int y, int w, int h)
 
 /* Copy the picture from the GPU. If the graphics library can hand it over in BGRA order
    (GL_EXT_read_format_bgra), the GPU does the colour swap and the CPU loop above is skipped. */
-static int uwp_bgra_state = -1; /* -1 not tried yet, 1 BGRA works, 0 RGBA + CPU swap */
+/* Measured on the Xbox (1.2.45/1.2.46): the BGRA read made glmark2 about 2x SLOWER than RGBA + our own
+   swap (the library converts the picture in a slower way). So it starts switched off (0). */
+static int uwp_bgra_state = 0; /* -1 try BGRA, 1 BGRA works, 0 RGBA + CPU swap */
 static void uwp_read_pixels(int gx, int gy, int w, int h, uint8_t *base, int stride, int sx, int sy)
 {
     uint8_t *p = base + (size_t)sx * 4;
