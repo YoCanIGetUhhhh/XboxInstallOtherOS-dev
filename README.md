@@ -59,8 +59,9 @@ In **Settings**, press **Screen size** until it shows one of these:
 | --- | --- |
 | GPU | Virtual graphics card drawn by the Xbox GPU, using ANGLE 2.1.13 (2016) |
 | GPU (new ANGLE) | The same, using a current ANGLE build (more graphics features, same speed) |
+| **GPU direct (new ANGLE)** (default) | Like GPU (new ANGLE), but the picture goes straight from the GPU to the screen with no copy through memory, so less CPU work |
 
-Measured on a Series X dev kit with Debian 13 + XFCE at 800x600: glmark2 score about **8** without GPU mode, about **245-252** with it.
+Measured on a Series X dev kit with Debian 13 + XFCE (glmark2, 800x600 window): about **8** without GPU mode, about **245-252** with it. With 4 CPUs, `glmark2 -b terrain -b refract -b shadow` scores about **180-195** in both GPU (new ANGLE) and GPU direct.
 
 ### Get OpenGL 3.3 inside Linux (do this once per Linux install)
 The Xbox graphics layer offers OpenGL ES 3.0, so Linux reports only **OpenGL 2.1** by default and some programs refuse to start. Linux can be told to report **OpenGL 3.3** instead. Most older games and apps work fine like this; a few may draw incorrectly.

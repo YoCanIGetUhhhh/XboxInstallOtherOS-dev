@@ -22,6 +22,8 @@ void *uwp_panel;
 volatile long uwp_direct_frames;
 volatile int uwp_direct_w, uwp_direct_h;
 __declspec(dllexport) void qemu_dll_set_panel(void *panel) { uwp_panel = panel; }
+volatile int uwp_snap_req;
+__declspec(dllexport) void qemu_dll_request_snapshot(void) { uwp_snap_req = 1; }
 __declspec(dllexport) int qemu_dll_direct_info(int *w, int *h)
 {
     if (w) *w = uwp_direct_w;

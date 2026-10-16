@@ -176,7 +176,7 @@
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="ScreenSizeButton" Content="Screen size" Style="{StaticResource MainButton}" Click="ScreenSizeButton_Click"/>
-                <TextBlock Text="GPU (new ANGLE) is recommended: Linux draws with the Xbox GPU. GPU uses the older graphics library. The other sizes draw with the CPU (Auto lets Linux choose)."
+                <TextBlock Text="GPU direct (new ANGLE) is recommended: Linux draws with the Xbox GPU and the picture goes straight to the screen. GPU (new ANGLE) copies the picture through memory, GPU uses the older graphics library. The other sizes draw with the CPU (Auto lets Linux choose)."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
             </StackPanel>

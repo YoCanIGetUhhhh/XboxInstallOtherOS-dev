@@ -263,6 +263,9 @@ namespace XboxVmHost
         [DllImport("qemu.dll", EntryPoint = "qemu_dll_set_panel_size")]
         private static extern void qemu_dll_set_panel_size(int w, int h, float sx, float sy);
 
+        [DllImport("qemu.dll", EntryPoint = "qemu_dll_request_snapshot")]
+        private static extern void qemu_dll_request_snapshot();
+
         [DllImport("qemu.dll", EntryPoint = "qemu_dll_attach_panel")]
         private static extern int qemu_dll_attach_panel();
 
@@ -529,7 +532,7 @@ namespace XboxVmHost
                     }
                 }
                 catch { }
-                return "GPU (new ANGLE)";
+                return "GPU direct (new ANGLE)";
             }
         }
 
@@ -1456,6 +1459,14 @@ namespace XboxVmHost
         {
             try
             {
+                if (_directCount > 0)
+                {
+                    // GPU direct: the picture is not in memory; ask QEMU to copy the last one once and wait for it.
+                    int before = _framesAfterDirect;
+                    qemu_dll_request_snapshot();
+                    for (int i = 0; i < 40 && _framesAfterDirect == before; i++) await System.Threading.Tasks.Task.Delay(50);
+                    if (_framesAfterDirect == before) { ShowVmNote("Screenshot failed: no picture came back"); return; }
+                }
                 int w = _lastW, h = _lastH;
                 if (w <= 0 || h <= 0 || _frameBuf == null) { ShowVmNote("No picture to save yet"); return; }
                 byte[] copy = new byte[w * h * 4];

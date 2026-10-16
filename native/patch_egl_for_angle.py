@@ -165,9 +165,6 @@ bool uwp_present(egl_fb *src)
 {
     EGLContext ctx = eglGetCurrentContext();
     int ww = uwp_d3d_width(), wh = uwp_d3d_height();
-    static int64_t t_total, t_draw, t_present, t_last_report;
-    static long n_frames, n_skipped;
-    int64_t t0 = g_get_monotonic_time(), t1, t2;
 
     if (!uwp_panel || uwp_win_failed || !src->framebuffer || !src->width || !src->height) {
         return false;
@@ -228,39 +225,8 @@ bool uwp_present(egl_fb *src)
     glClear(GL_COLOR_BUFFER_BIT);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glFlush();
-    {
-        static int logged;
-        GLenum ge = glGetError();
-        if (logged < 3 || ge != GL_NO_ERROR) {
-            if (logged < 20) {
-                logged++;
-                error_report("egl: direct frame %ld: %dx%d into %dx%d, gl error 0x%x",
-                             (long)uwp_direct_frames, src->width, src->height, ww, wh, ge);
-            }
-        }
-    }
-    t1 = g_get_monotonic_time();
-    if (!uwp_d3d_present()) {
-        n_skipped++;
-    }
-    t2 = g_get_monotonic_time();
+    uwp_d3d_present(); /* skipped (not shown) when the screen is not ready yet */
     eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(ctx), qemu_uwp_surface(ctx), ctx);
-    /* timing report every 10 seconds: where does the time go? */
-    n_frames++;
-    t_draw += t1 - t0;
-    t_present += t2 - t1;
-    t_total += g_get_monotonic_time() - t0;
-    if (!t_last_report) {
-        t_last_report = t0;
-    }
-    if (t0 - t_last_report > 10 * 1000000 && n_frames > 0) {
-        error_report("egl: GPU direct timing: %ld frames in %.1f s, per frame: draw %.2f ms, hand-over %.2f ms, total %.2f ms; skipped %ld",
-                     n_frames, (t0 - t_last_report) / 1e6, t_draw / 1000.0 / n_frames,
-                     t_present / 1000.0 / n_frames, t_total / 1000.0 / n_frames, n_skipped);
-        t_last_report = t0;
-        n_frames = n_skipped = 0;
-        t_draw = t_present = t_total = 0;
-    }
     uwp_direct_w = src->width;
     uwp_direct_h = src->height;
     uwp_direct_frames++;
@@ -315,6 +281,29 @@ for p in ("ui/egl-context.c", "ui/egl-headless.c"):
 # GPU direct: show the picture in the app window instead of copying it to memory.
 p = "ui/egl-headless.c"
 t = load(p)
+t = must_replace(t, """static void egl_refresh(DisplayChangeListener *dcl)
+{
+    graphic_hw_update(dcl->con);
+}""", """extern volatile int uwp_snap_req;
+
+static void egl_refresh(DisplayChangeListener *dcl)
+{
+    graphic_hw_update(dcl->con);
+    /* GPU direct: the app asked for a screenshot. Copy the last picture to memory once, the old way. */
+    if (uwp_snap_req) {
+        egl_dpy *edpy = container_of(dcl, egl_dpy, dcl);
+        uwp_snap_req = 0;
+        if (edpy->guest_fb.texture && edpy->blit_fb.framebuffer && edpy->ds) {
+            EGLContext pc = eglGetCurrentContext();
+            EGLSurface pd = eglGetCurrentSurface(EGL_DRAW), pr = eglGetCurrentSurface(EGL_READ);
+            eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(qemu_egl_rn_ctx),
+                           qemu_uwp_surface(qemu_egl_rn_ctx), qemu_egl_rn_ctx);
+            egl_fb_read(edpy->ds, &edpy->blit_fb);
+            eglMakeCurrent(qemu_egl_display, pd, pr, pc);
+            dpy_gfx_update(edpy->dcl.con, 0, 0, surface_width(edpy->ds), surface_height(edpy->ds));
+        }
+    }
+}""", "snapshot in refresh")
 t = must_replace(t, """    egl_fb_read(edpy->ds, &edpy->blit_fb);
     dpy_gfx_update(edpy->dcl.con, x, y, w, h);""", """    if (uwp_present(&edpy->blit_fb)) {
         return;
