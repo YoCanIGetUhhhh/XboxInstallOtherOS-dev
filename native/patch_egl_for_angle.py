@@ -169,7 +169,25 @@ bool uwp_present(egl_fb *src)
         glBlitFramebuffer(0, src->height, src->width, 0, dx, dy, dx + dw, dy + dh,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
     }
-    eglSwapBuffers(qemu_egl_display, uwp_win);
+    /* The guest picture has alpha 0 (X8R8G8B8). The app window treats alpha as transparency,
+       so make every pixel fully solid, or the picture is invisible (black). */
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    {
+        static int logged;
+        GLenum ge = glGetError();
+        EGLBoolean ok = eglSwapBuffers(qemu_egl_display, uwp_win);
+        if (logged < 4 || ge != GL_NO_ERROR || !ok) {
+            if (logged < 12) {
+                logged++;
+                error_report("egl: direct frame %dx%d into window %dx%d, gl error 0x%x, swap %s",
+                             src->width, src->height, ww, wh, ge,
+                             ok ? "ok" : qemu_egl_get_error_string());
+            }
+        }
+    }
     eglMakeCurrent(qemu_egl_display, qemu_uwp_surface(ctx), qemu_uwp_surface(ctx), ctx);
     uwp_direct_w = src->width;
     uwp_direct_h = src->height;
