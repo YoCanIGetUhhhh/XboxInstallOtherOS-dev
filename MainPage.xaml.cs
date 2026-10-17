@@ -42,6 +42,9 @@ namespace XboxVmHost
         // PC access: forwards port 2222 on the Xbox to port 22 (SSH) inside Linux, for SSH / FileZilla (SFTP).
         private static string PcFlagPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "pcaccess.on"); } }
         private static bool PcOn { get { try { return File.Exists(PcFlagPath); } catch { return false; } } }
+        // Sound: an Intel HD Audio card in Linux, played on the Xbox through XAudio2 (QEMU driver "xaudio2").
+        private static string SoundFlagPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "sound.on"); } }
+        private static bool SoundOn { get { try { return File.Exists(SoundFlagPath); } catch { return false; } } }
         private const long SharedSmallBytes = 480L * 1024 * 1024;  // up to here: the normal ~500 MB FAT16 drive (as in 1.2.59)
         private const long SharedMaxBytes = 1950L * 1024 * 1024;   // up to here: the big ~2 GB FAT16 drive (vvfat big=on, our patch)
 
@@ -752,6 +755,7 @@ namespace XboxVmHost
                 RamButton.Content = "Virtual RAM: " + VmRamMb + " MB (press to change)";
                 NetToggleButton.Content = NetOn ? "Network: ON (press to turn off)" : "Network: off (press to turn on)";
                 PcAccessButton.Content = PcOn ? "PC access (SSH port 2222): ON (press to turn off)" : "PC access (SSH port 2222): off (press to turn on)";
+                SoundButton.Content = SoundOn ? "Sound: ON (press to turn off)" : "Sound: off (press to turn on)";
                 SharedButton.Content = SharedOn ? "Shared folder: ON (press to turn off)" : "Shared folder: off (press to turn on)";
                 BootDiskButton.IsEnabled = haveDisk && !_qemuUsed;
                 BootIsoButton.IsEnabled = iso != null && !_qemuUsed;
@@ -859,6 +863,25 @@ namespace XboxVmHost
             RefreshStatus();
         }
 
+        private void SoundButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (SoundOn) { File.Delete(SoundFlagPath); SettingsMsg.Text = "Sound turned off."; }
+                else { File.WriteAllText(SoundFlagPath, "on"); SettingsMsg.Text = "Sound on (test): Linux gets a sound card (Intel HD Audio) played through the Xbox."; }
+            }
+            catch (Exception ex) { SLog("Could not change the sound setting: " + ex.Message); }
+            RefreshStatus();
+        }
+
+        // Sound card for Linux (only when Sound is ON).
+        private void AddSound(List<string> extra)
+        {
+            if (!SoundOn) return;
+            extra.AddRange(new string[] { "-audiodev", "xaudio2,id=snd0", "-device", "intel-hda", "-device", "hda-output,audiodev=snd0" });
+            Log("Sound: ON (Intel HD Audio, played with XAudio2).");
+        }
+
         private void SharedButton_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -906,6 +929,7 @@ namespace XboxVmHost
             AddShared(extra);
             AddNetwork(extra);
             AddPointer(extra);
+            AddSound(extra);
             StartVm("START FROM DISK (virtual RAM " + VmRamMb + " MB, app limit " + AppLimitMb() + " MB)", VmRamMb.ToString(), extra.ToArray());
         }
 
@@ -928,6 +952,7 @@ namespace XboxVmHost
             AddShared(extra);
             AddNetwork(extra);
             AddPointer(extra);
+            AddSound(extra);
             StartVm("BOOT FROM ISO (" + iso.Name + ", virtual RAM " + VmRamMb + " MB, app limit " + AppLimitMb() + " MB" + (haveDisk ? ", with virtual disk" : "") + ")",
                 VmRamMb.ToString(), extra.ToArray());
         }

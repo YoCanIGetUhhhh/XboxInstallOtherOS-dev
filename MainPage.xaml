@@ -190,6 +190,8 @@
                         Click="NetToggleButton_Click"/>
                 <Button x:Name="PcAccessButton" Content="PC access" Style="{StaticResource MainButton}"
                         Click="PcAccessButton_Click"/>
+                <Button x:Name="SoundButton" Content="Sound" Style="{StaticResource MainButton}"
+                        Click="SoundButton_Click"/>
                 <Button x:Name="SharedButton" Content="Shared folder" Style="{StaticResource MainButton}"
                         Click="SharedButton_Click"/>
                 <TextBlock Text="Shared folder: put files in LocalState\shared with the Device Portal (up to 1950 MB); Linux sees them read-only (drive label SHARED). PC access: SSH / FileZilla to this Xbox, port 2222, needs Network ON."
