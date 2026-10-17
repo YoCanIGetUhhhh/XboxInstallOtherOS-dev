@@ -1093,7 +1093,7 @@ namespace XboxVmHost
             catch (Exception ex) { Log("GPU direct not available: " + ex.Message); }
             try { SetEnvVar("UWP_ANGLE_SUFFIX", VmScreen.Contains("new ANGLE") ? "_new" : null); } catch (Exception ex) { Log("Could not choose the ANGLE files: " + ex.Message); }
 
-            if (_frameBuf == null) _frameBuf = new byte[1280 * 1024 * 4];
+            if (_frameBuf == null) _frameBuf = new byte[2560 * 1600 * 4];   // must match MAX_W x MAX_H in native/uwp_display.c
             _frameSeq = 0;
             _bitmap = null;
             _gotFrame = false;

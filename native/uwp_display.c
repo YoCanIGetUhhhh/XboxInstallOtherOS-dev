@@ -18,8 +18,8 @@
 
 #define EXPORT __attribute__((dllexport))
 
-#define MAX_W 1280
-#define MAX_H 1024
+#define MAX_W 2560
+#define MAX_H 1600
 
 /* ---------- screen ---------- */
 
