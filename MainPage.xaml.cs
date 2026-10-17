@@ -48,6 +48,11 @@ namespace XboxVmHost
         public MainPage()
         {
             this.InitializeComponent();
+            // The log box follows the newest line: whenever the text grows (after layout), jump to the bottom.
+            LogText.SizeChanged += (s, e) =>
+            {
+                try { LogScroller.UpdateLayout(); LogScroller.ChangeView(null, LogScroller.ScrollableHeight, null, true); } catch { }
+            };
             string shown = "";
             try
             {
