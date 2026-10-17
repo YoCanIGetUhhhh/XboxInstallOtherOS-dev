@@ -570,6 +570,32 @@ namespace XboxVmHost
             }
         }
 
+        // GPU modes: the resolution the virtual graphics card offers Linux as its preferred one (EDID). "Auto" = Linux picks.
+        private static readonly string[] GpuResChoices = { "Auto", "1920x1080", "1600x900", "1280x720" };
+        private static string GpuResCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "gpures.cfg"); } }
+        private static string VmGpuRes
+        {
+            get
+            {
+                try
+                {
+                    if (File.Exists(GpuResCfgPath))
+                    {
+                        string v = File.ReadAllText(GpuResCfgPath).Trim();
+                        if (Array.IndexOf(GpuResChoices, v) >= 0) return v;
+                    }
+                }
+                catch { }
+                return "Auto";
+            }
+        }
+
+        private void GpuResButton_Click(object sender, RoutedEventArgs e)
+        {
+            try { File.WriteAllText(GpuResCfgPath, GpuResChoices[(Array.IndexOf(GpuResChoices, VmGpuRes) + 1) % GpuResChoices.Length]); } catch { }
+            RefreshStatus();
+        }
+
         private static string SpeedText
         {
             get { return VmCpuModel + ", " + VmCpus + (VmCpus == 1 ? " CPU" : " CPUs") + ", cache " + VmTbMb + " MB, disk " + DiskModeNames[VmDiskMode] + ", screen " + VmScreen; }
@@ -628,6 +654,7 @@ namespace XboxVmHost
             try { File.Delete(SmpCfgPath); } catch { }
             try { File.Delete(DiskModeCfgPath); } catch { }
             try { File.Delete(ScreenCfgPath); } catch { }
+            try { File.Delete(GpuResCfgPath); } catch { }
             RefreshStatus();
         }
 
@@ -713,6 +740,7 @@ namespace XboxVmHost
                 CpusButton.Content = "Number of CPUs: " + VmCpus + " (press to change)";
                 DiskModeButton.Content = "Disk type: " + DiskModeNames[VmDiskMode] + " (press to change)";
                 ScreenSizeButton.Content = "Screen size: " + VmScreen + " (press to change)";
+                GpuResButton.Content = "GPU resolution: " + VmGpuRes + " (press to change)";
                 SpeedNote.Text = _qemuUsed
                     ? "QEMU has already run since the app opened. Close the app and open it again to use new settings."
                     : "Defaults are the recommended settings. Change ONE setting at a time.";
@@ -995,7 +1023,16 @@ namespace XboxVmHost
                 "-monitor", "none", "-serial", "none"
             });
             // "GPU": virtual graphics card (Virgl) drawn by the Xbox GPU through ANGLE (Direct3D 11). Everything else keeps the plain card.
-            if (VmScreen.StartsWith("GPU")) list.AddRange(new string[] { "-display", "egl-headless,gl=es", "-device", "virtio-vga-gl" });
+            if (VmScreen.StartsWith("GPU"))
+            {
+                string dev = "virtio-vga-gl";
+                if (VmGpuRes != "Auto")
+                {
+                    string[] r = VmGpuRes.Split('x');
+                    dev += ",edid=on,xres=" + r[0] + ",yres=" + r[1];   // offered to Linux as its preferred resolution
+                }
+                list.AddRange(new string[] { "-display", "egl-headless,gl=es", "-device", dev });
+            }
             else list.AddRange(new string[] { "-display", "none" });
             if (VmScreen.StartsWith("GPU")) { }
             else if (VmScreen == "Auto") list.AddRange(new string[] { "-vga", "std" });
