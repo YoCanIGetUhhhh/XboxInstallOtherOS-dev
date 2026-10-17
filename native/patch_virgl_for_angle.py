@@ -108,6 +108,24 @@ if n1 != 3 or n2 != 1 or n3 != 2:
     sys.exit("PATCH FAILED: sampler patch matched %d/%d/%d (expected 3/1/2)" % (n1, n2, n3))
 
 report.insert(0, "virglrenderer patch: %d check(s) removed" % changed)
+# The GL blitter writes its shaders as GLSL ES 3.10 ("#version 310 es"), but ANGLE on Direct3D 11 only has
+# OpenGL ES 3.0 / GLSL ES 3.00, so every blit through it failed ("unsupported shader version 310") and the
+# picture stayed black (seen with Wine games, 1.2.66 log). The plain blit shaders only use ES 3.00 features.
+blit_n = 0
+for path in glob.glob("virgl-src/src/**/*blitter*.[ch]", recursive=True):
+    text = open(path, encoding="utf-8", errors="replace").read()
+    n = text.count("#version 310 es")
+    if n:
+        open(path, "w", encoding="utf-8", newline="\n").write(text.replace("#version 310 es", "#version 300 es"))
+        blit_n += n
+        report.append("blitter GLSL ES 3.10 -> 3.00: %d in %s" % (n, path))
+if blit_n == 0:
+    report.append("blitter: no '#version 310 es' found; places that mention 310 es:")
+    for path in glob.glob("virgl-src/src/**/*.[ch]", recursive=True):
+        for i, l in enumerate(open(path, encoding="utf-8", errors="replace").read().split("\n")):
+            if "310 es" in l:
+                report.append("%s:%d: %s" % (path, i + 1, l.strip()))
+
 open("virgl-patch.txt", "w").write("\n".join(report) + "\n")
 print("\n".join(report))
 if changed == 0:
