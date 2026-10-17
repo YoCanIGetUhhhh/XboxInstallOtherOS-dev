@@ -155,7 +155,8 @@
                 <ColumnDefinition Width="28"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0">
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
                 <TextBlock Text="Settings" FontSize="30" FontWeight="SemiBold" Foreground="#272727"/>
                 <TextBlock x:Name="SpeedNote" FontSize="13" FontWeight="SemiBold" Foreground="#7A3E00" TextWrapping="Wrap" Margin="0,0,0,8"/>
 
@@ -176,11 +177,11 @@
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="ScreenSizeButton" Content="Screen size" Style="{StaticResource MainButton}" Click="ScreenSizeButton_Click"/>
-                <Button x:Name="GpuResButton" Content="GPU resolution" Style="{StaticResource MainButton}" Click="GpuResButton_Click"/>
-                <TextBlock Text="GPU direct (new ANGLE) is recommended: Linux draws with the Xbox GPU and the picture goes straight to the screen. GPU (new ANGLE) copies the picture through memory, GPU uses the older graphics library. The other sizes draw with the CPU (Auto lets Linux choose). GPU resolution (GPU modes only): the size offered to Linux at start; lower is smoother. Linux's own display settings can override it."
+                <TextBlock Text="GPU direct (new ANGLE) is recommended: Linux draws with the Xbox GPU and the picture goes straight to the screen. The other sizes draw with the CPU."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
             </StackPanel>
+            </ScrollViewer>
             <StackPanel Grid.Column="2" Margin="0,48,0,0">
                 <Button x:Name="RamButton" Content="Virtual RAM" Style="{StaticResource MainButton}"
                         Click="RamButton_Click"/>
@@ -197,6 +198,9 @@
                         HorizontalContentAlignment="Left" Margin="0,0,0,2" Click="CreateDiskButton_Click"/>
                 <Button x:Name="PickIsoButton" Content="Pick ISO file" Style="{StaticResource MainButton}"
                         Click="PickIsoButton_Click"/>
+                <Button x:Name="GpuResButton" Content="GPU resolution" Style="{StaticResource MainButton}" Click="GpuResButton_Click"/>
+                <TextBlock Text="GPU resolution (GPU screen modes only): the size offered to Linux at start. Lower is smoother. Linux's own display settings can override it."
+                           FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
                 <TextBlock x:Name="SettingsMsg" FontSize="13" Foreground="#272727" TextWrapping="Wrap" Margin="4,2,0,8" MinHeight="40"/>
                 <Grid>
                     <Grid.ColumnDefinitions>
