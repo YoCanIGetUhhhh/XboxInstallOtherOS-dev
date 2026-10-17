@@ -586,7 +586,7 @@ namespace XboxVmHost
                     }
                 }
                 catch { }
-                return "Auto";
+                return "1280x720";   // default from the next build: 16:9 fills the TV, best fullscreen glmark2 (186 vs Auto 181, 1080p 116)
             }
         }
 
