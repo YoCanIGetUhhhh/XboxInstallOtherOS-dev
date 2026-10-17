@@ -168,7 +168,7 @@
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="CpusButton" Content="Number of CPUs" Style="{StaticResource MainButton}" Click="CpusButton_Click"/>
-                <TextBlock Text="4 CPUs is the recommended choice (about 40% faster than 2). If the app crashes, try 3 or 2."
+                <TextBlock Text="4 CPUs is the recommended choice (about 40% faster than 2). 5 and 6 are for testing: they only help if the Xbox gives the app spare cores. If the app crashes, try fewer."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="DiskModeButton" Content="Disk type" Style="{StaticResource MainButton}" Click="DiskModeButton_Click"/>

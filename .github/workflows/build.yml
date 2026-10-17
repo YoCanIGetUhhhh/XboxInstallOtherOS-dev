@@ -121,6 +121,7 @@ jobs:
           set -e
           python native/patch_egl_for_angle.py
           python native/patch_vvfat_big.py
+          python native/patch_qemu_speed.py
 
       - name: Let QEMU's code generator use the memory calls an Xbox app is allowed to use
         run: |
@@ -157,7 +158,7 @@ jobs:
           set -o pipefail
           mkdir -p qemu-src/build
           cd qemu-src/build
-          ../configure --cc="ccache gcc" --static --target-list=x86_64-softmmu --without-default-features --enable-tcg --enable-slirp --enable-opengl --enable-virglrenderer --enable-vvfat --disable-werror 2>&1 | tee configure.log
+          ../configure --cc="ccache gcc" --static --target-list=x86_64-softmmu --without-default-features --enable-tcg --enable-slirp --enable-opengl --enable-virglrenderer --enable-vvfat --disable-werror --extra-cflags="-O3 -march=znver2 -mtune=znver2" 2>&1 | tee configure.log
 
       - name: Build QEMU
         run: |

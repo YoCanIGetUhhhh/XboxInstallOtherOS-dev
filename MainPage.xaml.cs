@@ -480,7 +480,7 @@ namespace XboxVmHost
         // =====================================================================
         private static readonly string[] CpuChoices = { "qemu64", "Nehalem", "Haswell-noTSX", "max" };
         private static readonly int[] TbChoices = { 64, 128, 256 };
-        private static readonly int[] CpuCountChoices = { 1, 2, 3, 4 };
+        private static readonly int[] CpuCountChoices = { 1, 2, 3, 4, 5, 6 };
         private static string CpuCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "cpu.cfg"); } }
         private static string TbCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "tb.cfg"); } }
         private static string SmpCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "smp.cfg"); } }
@@ -913,7 +913,9 @@ namespace XboxVmHost
             string id = "hd" + index;
             string cache = mode == 2 ? "unsafe" : "writeback";
             extra.AddRange(new string[] { "-drive", "file=" + path + ",format=raw,if=none,id=" + id + ",cache=" + cache });
-            extra.AddRange(new string[] { "-device", "virtio-blk-pci,drive=" + id + (bootFirst ? ",bootindex=0" : "") });
+            // A separate disk thread (iothread), so disk work never holds up QEMU's main loop (screen, GPU, input).
+            if (!extra.Contains("iothread,id=io0")) extra.AddRange(new string[] { "-object", "iothread,id=io0" });
+            extra.AddRange(new string[] { "-device", "virtio-blk-pci,drive=" + id + ",iothread=io0" + (bootFirst ? ",bootindex=0" : "") });
         }
 
         private void AddMedia(List<string> extra)
@@ -1070,9 +1072,10 @@ namespace XboxVmHost
                 try { File.AppendAllText(LogPath, "Step 2: QEMU thread started\n"); } catch { }
                 // This thread becomes QEMU's main loop, which does all the GPU work. In GPU mode it goes ahead of the
                 // virtual CPU threads, so graphics do not wait behind them.
-                if (gpuMode)
+                // From 1.2.61 the virtual CPU threads run at AboveNormal (patch_qemu_speed.py), so the main loop is
+                // AboveNormal too (never behind them), and Highest in GPU mode (graphics first).
                 {
-                    try { Thread.CurrentThread.Priority = ThreadPriority.AboveNormal; File.AppendAllText(LogPath, "GPU mode: QEMU main loop priority set to AboveNormal\n"); }
+                    try { Thread.CurrentThread.Priority = gpuMode ? ThreadPriority.Highest : ThreadPriority.AboveNormal; File.AppendAllText(LogPath, "QEMU main loop priority set to " + (gpuMode ? "Highest (GPU mode)" : "AboveNormal") + "\n"); }
                     catch (Exception ex) { try { File.AppendAllText(LogPath, "Could not raise the main loop priority: " + ex.Message + "\n"); } catch { } }
                 }
                 try { _vmResult = qemu_dll_main(outp, args.Length, argv); }
