@@ -479,7 +479,7 @@ namespace XboxVmHost
         // Each is remembered in its own small file. Defaults are the settings that are known to work.
         // =====================================================================
         private static readonly string[] CpuChoices = { "qemu64", "Nehalem", "Haswell-noTSX", "max" };
-        private static readonly int[] TbChoices = { 64, 128, 256 };
+        private static readonly int[] TbChoices = { 64, 128, 256, 512 };
         private static readonly int[] CpuCountChoices = { 1, 2, 3, 4, 5, 6 };
         private static string CpuCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "cpu.cfg"); } }
         private static string TbCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "tb.cfg"); } }
@@ -512,7 +512,7 @@ namespace XboxVmHost
                     if (File.Exists(TbCfgPath) && int.TryParse(File.ReadAllText(TbCfgPath).Trim(), out v) && Array.IndexOf(TbChoices, v) >= 0) return v;
                 }
                 catch { }
-                return 128;
+                return 256;   // default from 1.2.62: Firefox start 21 s with 256 MB vs 27 s with 128 MB (1.2.61 test)
             }
         }
 
