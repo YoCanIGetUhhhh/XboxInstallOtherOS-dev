@@ -164,7 +164,7 @@
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="TbButton" Content="Code cache" Style="{StaticResource MainButton}" Click="TbButton_Click"/>
-                <TextBlock Text="Memory for translated code. 256 MB is the recommended size (big programs like Firefox start about 20% faster than with 128). 512 is for testing. Virtual RAM plus this must fit inside the Xbox app limit."
+                <TextBlock Text="Memory for translated code. 512 MB is the recommended size (Firefox starts 43% faster than with 128 MB). 1024 is for testing. Virtual RAM plus this must fit inside the Xbox app limit: if the app crashes, lower one of them."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
 
                 <Button x:Name="CpusButton" Content="Number of CPUs" Style="{StaticResource MainButton}" Click="CpusButton_Click"/>
