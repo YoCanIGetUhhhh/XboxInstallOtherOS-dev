@@ -27,6 +27,47 @@ static int g_next;
 static int g_started;
 static char g_err[200];
 
+/* XAudio2 is looked up while running (not linked in): 1.2.68 linked it directly, and qemu.dll then could not
+   load at all on the Xbox, so not even Linux without sound could start. Now a failure only means "no sound".
+   LoadLibraryExW is not in the UWP list, so its address is taken from kernelbase/kernel32 at run time: the
+   module that holds LoadPackagedLibrary is found with VirtualQuery. */
+typedef HRESULT (WINAPI *xa_create_fn)(IXAudio2 **, UINT32, XAUDIO2_PROCESSOR);
+typedef HRESULT (WINAPI *xa_create_v_fn)(IXAudio2 **, UINT32, XAUDIO2_PROCESSOR, DWORD);
+typedef HMODULE (WINAPI *loadex_fn)(LPCWSTR, HANDLE, DWORD);
+
+static HRESULT xa_create(IXAudio2 **out)
+{
+    static int tried;
+    static xa_create_fn f1;
+    static xa_create_v_fn f2;
+    if (!tried) {
+        MEMORY_BASIC_INFORMATION mbi;
+        HMODULE lib = NULL;
+        loadex_fn loadex = NULL;
+        tried = 1;
+        lib = LoadPackagedLibrary(L"xaudio2_9redist.dll", 0);   /* optional copy inside the package */
+        if (!lib && VirtualQuery((void *)LoadPackagedLibrary, &mbi, sizeof mbi) && mbi.AllocationBase) {
+            loadex = (loadex_fn)GetProcAddress((HMODULE)mbi.AllocationBase, "LoadLibraryExW");
+            if (loadex) {
+                lib = loadex(L"xaudio2_9.dll", NULL, 0x00000800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
+                if (!lib) lib = loadex(L"xaudio2_9.dll", NULL, 0);
+                if (!lib) lib = loadex(L"xaudio2_8.dll", NULL, 0);
+            }
+        }
+        if (!lib) {
+            snprintf(g_err, sizeof g_err, "XAudio2 library not available to the app (LoadLibraryExW %s, error %lu)",
+                     loadex ? "found" : "not found", (unsigned long)GetLastError());
+            return E_FAIL;
+        }
+        f1 = (xa_create_fn)GetProcAddress(lib, "XAudio2Create");
+        f2 = (xa_create_v_fn)GetProcAddress(lib, "XAudio2CreateWithVersionInfo");
+    }
+    if (f2) return f2(out, 0, XAUDIO2_DEFAULT_PROCESSOR, 0x0A000006);
+    if (f1) return f1(out, 0, XAUDIO2_DEFAULT_PROCESSOR);
+    if (!g_err[0]) snprintf(g_err, sizeof g_err, "XAudio2Create not found in the XAudio2 library");
+    return E_FAIL;
+}
+
 const char *uwp_snd_error(void) { return g_err; }
 
 void uwp_snd_close(void)
@@ -46,9 +87,10 @@ int uwp_snd_open(int rate, int channels, int block_bytes)
     HRESULT hr;
 
     uwp_snd_close();
-    hr = XAudio2Create(&g_xa, 0, XAUDIO2_DEFAULT_PROCESSOR);
+    g_err[0] = 0;
+    hr = xa_create(&g_xa);
     if (FAILED(hr) || !g_xa) {
-        snprintf(g_err, sizeof g_err, "XAudio2Create failed 0x%08lx", (unsigned long)hr);
+        if (!g_err[0]) snprintf(g_err, sizeof g_err, "XAudio2Create failed 0x%08lx", (unsigned long)hr);
         g_xa = NULL;
         return -1;
     }
