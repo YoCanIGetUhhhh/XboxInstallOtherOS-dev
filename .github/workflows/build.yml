@@ -465,6 +465,13 @@ jobs:
           /p:PackageCertificatePassword=xboxdev
           /p:AppxPackageDir="$env:GITHUB_WORKSPACE\out\"
 
+      - name: Keep only what the Xbox needs (the app and the x64 dependencies)
+        shell: pwsh
+        run: |
+          Get-ChildItem out -Recurse -Directory | Where-Object { $_.Parent.Name -eq 'Dependencies' -and $_.Name -ne 'x64' } | Remove-Item -Recurse -Force
+          Get-ChildItem out -Recurse -File | Where-Object { $_.Extension -in '.appxsym', '.msixsym' } | Remove-Item -Force
+          Write-Host "Package contents:"; Get-ChildItem out -Recurse -File | ForEach-Object { Write-Host ("  " + $_.FullName.Substring((Resolve-Path out).Path.Length)) }
+
       - name: Upload the package
         uses: actions/upload-artifact@v4
         with:
