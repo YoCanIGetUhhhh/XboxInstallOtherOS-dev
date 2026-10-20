@@ -931,10 +931,9 @@ namespace XboxVmHost
                 bool sparse = CreateRawDisk(path, (long)gb * 1024L * 1024L * 1024L);
                 long used = UsedBytes(path);
                 if (sparse)
-                    SLog("Created " + VmName + ": a " + gb + " GB grow-as-needed virtual disk. It uses " + (used >= 0 ? GbText(used) : "almost nothing") + " now and only grows as Linux fills it.");
+                    SLog("Created " + VmName + ": a " + gb + " GB grow-as-needed virtual disk. It uses " + (used >= 0 ? GbText(used) : "almost nothing") + " now and only grows as Linux fills it. Next: Back, then \"Boot from ISO\".");
                 else
-                    SLog("Created " + VmName + ": a " + gb + " GB virtual disk (full size: this storage does not allow grow-as-needed files).");
-                SLog("Ready. Now press \"Boot from ISO\" and install Linux onto it.");
+                    SLog("Created " + VmName + ": a " + gb + " GB virtual disk (full size: this storage does not allow grow-as-needed files). Next: Back, then \"Boot from ISO\".");
             }
             catch (Exception ex)
             {
@@ -1113,7 +1112,8 @@ namespace XboxVmHost
             extra.AddRange(new string[] { "-drive", "file=" + path + "," + DiskFormat(path) + ",if=none,id=" + id + ",cache=" + cache });
             // A separate disk thread (iothread), so disk work never holds up QEMU's main loop (screen, GPU, input).
             if (!extra.Contains("iothread,id=io0")) extra.AddRange(new string[] { "-object", "iothread,id=io0" });
-            extra.AddRange(new string[] { "-device", "virtio-blk-pci,drive=" + id + ",iothread=io0" + (bootFirst ? ",bootindex=0" : "") });
+            // A serial number gives the disk a stable /dev/disk/by-id/virtio-VM1 (etc.) name in Linux; some installers (MiniOS) require one.
+            extra.AddRange(new string[] { "-device", "virtio-blk-pci,drive=" + id + ",serial=" + (index == 0 ? VmName : VmName + "-STORAGE") + ",iothread=io0" + (bootFirst ? ",bootindex=0" : "") });
         }
 
         // All usable disks are raw. (1.2.73 made qcow2 disks, which crash QEMU on the Xbox; those are refused before starting.)
@@ -1196,7 +1196,7 @@ namespace XboxVmHost
                 string dir = SharedDir.Replace(",", ",,");
                 string big = bytes > SharedSmallBytes ? ",big=on" : "";
                 extra.AddRange(new string[] { "-drive", "if=none,id=sh0,driver=vvfat,dir=" + dir + ",label=SHARED,readonly=on" + big,
-                                              "-device", "virtio-blk-pci,drive=sh0" });
+                                              "-device", "virtio-blk-pci,drive=sh0,serial=SHARED" });
                 Log("Shared folder attached (" + (bytes / (1024 * 1024)) + " MB, read-only). In Linux: sudo mount -o ro LABEL=SHARED /mnt/shared");
             }
             catch (Exception ex) { Log("Shared folder NOT attached: " + ex.Message); }
