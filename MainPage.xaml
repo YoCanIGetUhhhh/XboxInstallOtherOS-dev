@@ -196,11 +196,16 @@
                         Click="SharedButton_Click"/>
                 <TextBlock Text="Shared folder: put files in LocalState\shared with the Device Portal (up to 1950 MB); Linux sees them read-only (drive label SHARED). PC access: SSH / FileZilla to this Xbox, port 2222, needs Network ON."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
+                <Button x:Name="SlotButton" Content="Disk slot" Style="{StaticResource MainButton}" Click="SlotButton_Click"/>
                 <Button x:Name="DiskSizeButton" Content="Disk size" Style="{StaticResource MainButton}" Click="DiskSizeButton_Click"/>
                 <Button x:Name="CreateDiskButton" Content="Create virtual disk" Style="{StaticResource CreateButton}"
                         HorizontalContentAlignment="Left" Margin="0,0,0,2" Click="CreateDiskButton_Click"/>
                 <Button x:Name="PickIsoButton" Content="Pick ISO file" Style="{StaticResource MainButton}"
                         Click="PickIsoButton_Click"/>
+                <Button x:Name="IsoChoiceButton" Content="ISO" Style="{StaticResource MainButton}" Click="IsoChoiceButton_Click"/>
+                <Button x:Name="IsoDiskButton" Content="Boot from ISO: with disk" Style="{StaticResource MainButton}" Click="IsoDiskButton_Click"/>
+                <TextBlock Text="Disk slot: each slot is its own virtual disk (its own Linux). ISO: which .iso Boot from ISO uses. Live only: the ISO runs without any disk, so nothing can be installed or changed."
+                           FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>
                 <Button x:Name="GpuResButton" Content="GPU resolution" Style="{StaticResource MainButton}" Click="GpuResButton_Click"/>
                 <TextBlock Text="GPU resolution (GPU screen modes only): the size offered to Linux at start. Lower is smoother. Linux's own display settings can override it."
                            FontSize="12" Foreground="#272727" TextWrapping="Wrap" Margin="4,0,0,6"/>

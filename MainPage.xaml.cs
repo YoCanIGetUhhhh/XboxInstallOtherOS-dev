@@ -666,15 +666,80 @@ namespace XboxVmHost
             RefreshStatus();
         }
 
+        // Disk slots: each slot is a separate virtual PC disk, so several Linux installs can live side by side.
+        // Slot 1 keeps the original file names (vmdisk.img, media.img, vmstate.*), so nothing has to be moved.
+        private static string SlotCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "slot.cfg"); } }
+        private const int SlotCount = 3;
+        private static int VmSlot
+        {
+            get
+            {
+                try
+                {
+                    int v;
+                    if (File.Exists(SlotCfgPath) && int.TryParse(File.ReadAllText(SlotCfgPath).Trim(), out v) && v >= 1 && v <= SlotCount) return v;
+                }
+                catch { }
+                return 1;
+            }
+        }
+        private static string SlotSuffix { get { int s = VmSlot; return s == 1 ? "" : "-" + s; } }
+
+        private void SlotButton_Click(object sender, RoutedEventArgs e)
+        {
+            try { File.WriteAllText(SlotCfgPath, (VmSlot % SlotCount + 1).ToString()); } catch { }
+            SettingsMsg.Text = "Disk slot " + VmSlot + ": " + (File.Exists(DiskPath) ? "has a virtual disk (" + SizeText(DiskPath) + ")." : "empty. Press \"Create virtual disk\" to make one for this slot.");
+            RefreshStatus();
+        }
+
         private static string DiskPath
         {
-            get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "vmdisk.img"); }
+            get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "vmdisk" + SlotSuffix + ".img"); }
         }
 
         // Second "storage" disk (shows up in Linux as /dev/sdb). Made when the main disk already exists.
         private static string MediaPath
         {
-            get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "media.img"); }
+            get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "media" + SlotSuffix + ".img"); }
+        }
+
+        // Which ISO "Boot from ISO" uses: the one chosen with the ISO button, or the newest one.
+        private static string IsoCfgPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "iso.cfg"); } }
+        private static FileInfo[] AllIsos()
+        {
+            try
+            {
+                FileInfo[] isos = new DirectoryInfo(ApplicationData.Current.LocalFolder.Path).GetFiles("*.iso");
+                Array.Sort(isos, (x, y) => string.Compare(x.Name, y.Name, StringComparison.OrdinalIgnoreCase));
+                return isos;
+            }
+            catch { return new FileInfo[0]; }
+        }
+
+        private void IsoChoiceButton_Click(object sender, RoutedEventArgs e)
+        {
+            FileInfo[] isos = AllIsos();
+            if (isos.Length == 0) { SettingsMsg.Text = "No .iso files in LocalState yet."; return; }
+            FileInfo cur = NewestIso();
+            int i = -1;
+            for (int k = 0; k < isos.Length; k++) if (cur != null && isos[k].Name == cur.Name) i = k;
+            try { File.WriteAllText(IsoCfgPath, isos[(i + 1) % isos.Length].Name); } catch { }
+            RefreshStatus();
+        }
+
+        // ISO boots can leave the virtual disk out, so trying a live system can never change an installed one.
+        private static string IsoNoDiskFlagPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "isodisk.off"); } }
+        private static bool IsoAttachDisk { get { try { return !File.Exists(IsoNoDiskFlagPath); } catch { return true; } } }
+
+        private void IsoDiskButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (IsoAttachDisk) { File.WriteAllText(IsoNoDiskFlagPath, "off"); SettingsMsg.Text = "Boot from ISO now runs the ISO alone (live only): no virtual disk is attached, nothing can be installed or changed."; }
+                else { File.Delete(IsoNoDiskFlagPath); SettingsMsg.Text = "Boot from ISO attaches the disk of slot " + VmSlot + " too (to install Linux onto it)."; }
+            }
+            catch { }
+            RefreshStatus();
         }
 
         // New disk size, chosen with the size button and remembered in disk.cfg. 10 GB is the default.
@@ -720,6 +785,12 @@ namespace XboxVmHost
         {
             try
             {
+                if (File.Exists(IsoCfgPath))
+                {
+                    string want = File.ReadAllText(IsoCfgPath).Trim();
+                    FileInfo f = new FileInfo(Path.Combine(ApplicationData.Current.LocalFolder.Path, want));
+                    if (want.Length > 0 && f.Exists) return f;
+                }
                 FileInfo[] isos = new DirectoryInfo(ApplicationData.Current.LocalFolder.Path).GetFiles("*.iso");
                 if (isos.Length == 0) return null;
                 Array.Sort(isos, (x, y) => y.LastWriteTimeUtc.CompareTo(x.LastWriteTimeUtc));
@@ -739,6 +810,10 @@ namespace XboxVmHost
                 bool haveMedia = File.Exists(MediaPath);
                 StatusDisk.Text = !haveDisk ? "not created yet"
                     : SizeText(DiskPath) + " main disk" + (haveMedia ? " + " + SizeText(MediaPath) + " storage disk" : "");
+                StatusDisk.Text = "slot " + VmSlot + ": " + StatusDisk.Text;
+                SlotButton.Content = "Disk slot: " + VmSlot + (haveDisk ? "" : " (empty)") + " (press to change)";
+                IsoChoiceButton.Content = "ISO: " + (iso == null ? "none" : iso.Name) + " (press to change)";
+                IsoDiskButton.Content = IsoAttachDisk ? "Boot from ISO: with disk (to install)" : "Boot from ISO: live only (no disk)";
                 StatusRam.Text = VmRamMb + " MB   (Xbox app limit " + AppLimitMb() + " MB)";
                 StatusNet.Text = (NetOn ? "ON (NAT, 10.0.2.15)" : "off") + (NetOn && PcOn ? ", PC access on port 2222" : "")
                     + (SharedOn ? ", shared folder on" : "");
@@ -945,7 +1020,7 @@ namespace XboxVmHost
             }
             if (!await ConfirmDiscardState()) return;
             var extra = new List<string>();
-            bool haveDisk = File.Exists(DiskPath);
+            bool haveDisk = File.Exists(DiskPath) && IsoAttachDisk;
             if (haveDisk) AddDisk(extra, DiskPath, 0, false);
             if (haveDisk) AddMedia(extra);
             extra.AddRange(new string[] { "-cdrom", iso.FullName, "-boot", "order=d,menu=on" });
@@ -953,7 +1028,7 @@ namespace XboxVmHost
             AddNetwork(extra);
             AddPointer(extra);
             AddSound(extra);
-            StartVm("BOOT FROM ISO (" + iso.Name + ", virtual RAM " + VmRamMb + " MB, app limit " + AppLimitMb() + " MB" + (haveDisk ? ", with virtual disk" : "") + ")",
+            StartVm("BOOT FROM ISO (" + iso.Name + ", virtual RAM " + VmRamMb + " MB, app limit " + AppLimitMb() + " MB" + (haveDisk ? ", with the disk of slot " + VmSlot : ", no disk (live only)") + ")",
                 VmRamMb.ToString(), extra.ToArray());
         }
 
@@ -1176,9 +1251,9 @@ namespace XboxVmHost
         private bool _saving;
         private volatile bool _saveOk;
 
-        private static string StatePath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "vmstate.bin"); } }
-        private static string StateArgsPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "vmstate.args"); } }
-        private static string StateInfoPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "vmstate.info"); } }
+        private static string StatePath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "vmstate" + SlotSuffix + ".bin"); } }
+        private static string StateArgsPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "vmstate" + SlotSuffix + ".args"); } }
+        private static string StateInfoPath { get { return Path.Combine(ApplicationData.Current.LocalFolder.Path, "vmstate" + SlotSuffix + ".info"); } }
 
         private static string DiskStamp()
         {
