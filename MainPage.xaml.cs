@@ -750,10 +750,12 @@ namespace XboxVmHost
         {
             try
             {
-                long used = new FileInfo(path).Length;
+                long len = new FileInfo(path).Length;
                 long virt = Qcow2Size(path);
-                if (virt > 0) return (virt / (1024L * 1024L * 1024L)) + " GB, uses " + GbText(used);
-                return (used / (1024L * 1024L * 1024L)) + " GB";
+                if (virt > 0) return (virt / (1024L * 1024L * 1024L)) + " GB, old 1.2.73 type - delete it";
+                long used = UsedBytes(path);
+                string u = used >= 0 && used < len - 64L * 1024 * 1024 ? ", uses " + GbText(used) : "";
+                return (len / (1024L * 1024L * 1024L)) + " GB" + u;
             }
             catch { return "?"; }
         }
@@ -787,39 +789,42 @@ namespace XboxVmHost
             catch { return 0; }
         }
 
-        // Writes an empty qcow2 disk (version 3, 64 KB clusters): header, refcount table, one refcount block, L1 table.
-        // The file starts at about 256 KB and grows only as Linux writes. Same layout checked with "qemu-img check".
-        private static void WriteEmptyQcow2(string path, long size)
+        [DllImport("api-ms-win-core-io-l1-1-1.dll", EntryPoint = "DeviceIoControl", SetLastError = true)]
+        private static extern bool DeviceIoControl(Microsoft.Win32.SafeHandles.SafeFileHandle h, uint code, IntPtr inBuf, uint inSize,
+            IntPtr outBuf, uint outSize, out uint returned, IntPtr overlapped);
+
+        [DllImport("api-ms-win-core-file-l2-1-0.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
+        private static extern bool GetFileInformationByHandleEx(Microsoft.Win32.SafeHandles.SafeFileHandle h, int infoClass, byte[] buf, uint size);
+
+        // Space the file really takes on the Xbox (a sparse disk only takes what Linux has written). -1 = unknown.
+        private static long UsedBytes(string path)
         {
-            const int C = 65536;
-            long l1 = (size + (long)C * (C / 8) - 1) / ((long)C * (C / 8));
-            int l1Clusters = (int)((l1 * 8 + C - 1) / C);
-            int total = 3 + l1Clusters;
-            var buf = new byte[total * C];
-            int o = 0;
-            Action<long, int> put = (v, n) => { for (int i = n - 1; i >= 0; i--) buf[o++] = (byte)(v >> (8 * i)); };
-            put(0x514649FB, 4);   // magic "QFI\xfb"
-            put(3, 4);            // version 3
-            put(0, 8);            // no backing file
-            put(0, 4);
-            put(16, 4);           // cluster bits: 64 KB clusters
-            put(size, 8);         // disk size Linux sees
-            put(0, 4);            // no encryption
-            put((int)l1, 4);      // L1 entries
-            put(3L * C, 8);       // L1 table offset
-            put(1L * C, 8);       // refcount table offset
-            put(1, 4);            // refcount table clusters
-            put(0, 4);            // snapshots
-            put(0, 8);
-            put(0, 8);            // incompatible features
-            put(0, 8);            // compatible features
-            put(0, 8);            // autoclear features
-            put(4, 4);            // refcount order: 16-bit refcounts
-            put(104, 4);          // header length
-            o = C; put(2L * C, 8);                      // refcount table -> refcount block
-            for (int i = 0; i < total; i++) { o = 2 * C + 2 * i; put(1, 2); }   // every metadata cluster is in use once
-            using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
-                fs.Write(buf, 0, buf.Length);
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    var b = new byte[24];   // FILE_STANDARD_INFO: AllocationSize comes first
+                    if (!GetFileInformationByHandleEx(fs.SafeFileHandle, 1, b, 24)) return -1;
+                    return BitConverter.ToInt64(b, 0);
+                }
+            }
+            catch { return -1; }
+        }
+
+        // New disks are plain raw files (the type QEMU on the Xbox handles; 1.2.73's qcow2 disks crashed it), marked "sparse"
+        // so Windows does not reserve the whole size: the file only takes space as Linux writes. If sparse is refused,
+        // the disk is made full size the old way. Returns true when it is sparse.
+        private static bool CreateRawDisk(string path, long size)
+        {
+            bool sparse = false;
+            using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite))
+            {
+                uint n;
+                try { sparse = DeviceIoControl(fs.SafeFileHandle, 0x000900C4 /* FSCTL_SET_SPARSE */, IntPtr.Zero, 0, IntPtr.Zero, 0, out n, IntPtr.Zero); }
+                catch { sparse = false; }
+                fs.SetLength(size);
+            }
+            return sparse;
         }
 
         [DllImport("api-ms-win-core-file-l1-1-0.dll", EntryPoint = "GetDiskFreeSpaceExW", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -894,6 +899,8 @@ namespace XboxVmHost
                 DiskSizeButton.Content = "Disk size: " + NewDiskGb + " GB";
                 CreateDiskButton.Content = !haveDisk ? "Create disk " + VmName + " (" + NewDiskGb + " GB)" : VmName + " is created";
                 CreateDiskButton.IsEnabled = !haveDisk;
+                DeleteDiskButton.Content = File.Exists(DiskPath) ? "Delete disk " + VmName : "Delete disk " + VmName + " (no disk)";
+                DeleteDiskButton.IsEnabled = File.Exists(DiskPath) && !_qemuUsed;
             }
             catch { }
         }
@@ -921,8 +928,12 @@ namespace XboxVmHost
                     return;
                 }
                 if (File.Exists(path)) File.Delete(path);   // empty file left over from a failed try
-                WriteEmptyQcow2(path, (long)gb * 1024L * 1024L * 1024L);
-                SLog("Created " + VmName + ": a " + gb + " GB grow-as-needed virtual disk. It uses " + GbText(new FileInfo(path).Length) + " now and only grows as Linux fills it.");
+                bool sparse = CreateRawDisk(path, (long)gb * 1024L * 1024L * 1024L);
+                long used = UsedBytes(path);
+                if (sparse)
+                    SLog("Created " + VmName + ": a " + gb + " GB grow-as-needed virtual disk. It uses " + (used >= 0 ? GbText(used) : "almost nothing") + " now and only grows as Linux fills it.");
+                else
+                    SLog("Created " + VmName + ": a " + gb + " GB virtual disk (full size: this storage does not allow grow-as-needed files).");
                 SLog("Ready. Now press \"Boot from ISO\" and install Linux onto it.");
             }
             catch (Exception ex)
@@ -1046,6 +1057,7 @@ namespace XboxVmHost
                 Log("There is no virtual disk yet. Press \"Create virtual disk\" first, then install Linux onto it with \"Boot from ISO\".");
                 return;
             }
+            if (OldQcow2Refused()) return;
             if (!await ConfirmDiscardState()) return;
             var extra = new List<string>();
             AddDisk(extra, DiskPath, 0, true);
@@ -1068,6 +1080,7 @@ namespace XboxVmHost
                 Log("No .iso file found. Use \"Pick ISO file\" first.");
                 return;
             }
+            if (OldQcow2Refused()) return;
             if (!await ConfirmDiscardState()) return;
             var extra = new List<string>();
             bool haveDisk = DiskExists(DiskPath);
@@ -1103,11 +1116,44 @@ namespace XboxVmHost
             extra.AddRange(new string[] { "-device", "virtio-blk-pci,drive=" + id + ",iothread=io0" + (bootFirst ? ",bootindex=0" : "") });
         }
 
-        // Old disks are raw; disks made from 1.2.73 are qcow2 (grow-as-needed). The bigger table cache keeps qcow2 quick on disks up to 64 GB,
-        // and discard lets space Linux frees be reused inside the file.
+        // All usable disks are raw. (1.2.73 made qcow2 disks, which crash QEMU on the Xbox; those are refused before starting.)
         private static string DiskFormat(string path)
         {
-            return Qcow2Size(path) > 0 ? "format=qcow2,l2-cache-size=8M,discard=unmap" : "format=raw";
+            return "format=raw";
+        }
+
+        private bool OldQcow2Refused()
+        {
+            if (!DiskExists(DiskPath) || Qcow2Size(DiskPath) <= 0) return false;
+            ResetLog();
+            Log(VmName + " was made by version 1.2.73 (qcow2 type), and that type crashes QEMU on the Xbox, so Linux was not started.");
+            Log("Fix: Settings > \"Delete disk " + VmName + "\", then \"Create disk " + VmName + "\" again.");
+            return true;
+        }
+
+        private async void DeleteDiskButton_Click(object sender, RoutedEventArgs e)
+        {
+            string path = DiskPath;
+            if (!File.Exists(path)) { SettingsMsg.Text = VmName + " has no disk to delete."; return; }
+            if (_qemuUsed) { SettingsMsg.Text = "Linux has run since the app opened. Close the app and open it again, then delete the disk."; return; }
+            var dlg = new ContentDialog
+            {
+                Title = "Delete disk " + VmName + "?",
+                Content = "Everything installed on " + VmName + " (" + SizeText(path) + ") is deleted for good. Other disks are not touched.",
+                PrimaryButtonText = "Delete " + VmName,
+                CloseButtonText = "Cancel"
+            };
+            ContentDialogResult r = ContentDialogResult.None;
+            try { r = await dlg.ShowAsync(); } catch { return; }
+            if (r != ContentDialogResult.Primary) return;
+            try
+            {
+                File.Delete(path);
+                DeleteState();   // a saved state belongs to this disk, so it goes too
+                SettingsMsg.Text = VmName + " deleted. Free space for the app: " + FreeText() + ".";
+            }
+            catch (Exception ex) { SettingsMsg.Text = "Could not delete " + VmName + ": " + ex.Message; }
+            RefreshStatus();
         }
 
         private void AddMedia(List<string> extra)

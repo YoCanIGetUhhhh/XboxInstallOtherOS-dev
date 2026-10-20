@@ -200,6 +200,7 @@
                 <Button x:Name="DiskSizeButton" Content="Disk size" Style="{StaticResource MainButton}" Click="DiskSizeButton_Click"/>
                 <Button x:Name="CreateDiskButton" Content="Create virtual disk" Style="{StaticResource CreateButton}"
                         HorizontalContentAlignment="Left" Margin="0,0,0,2" Click="CreateDiskButton_Click"/>
+                <Button x:Name="DeleteDiskButton" Content="Delete disk" Style="{StaticResource MainButton}" Click="DeleteDiskButton_Click"/>
                 <Button x:Name="PickIsoButton" Content="Pick ISO file" Style="{StaticResource MainButton}"
                         Click="PickIsoButton_Click"/>
                 <Button x:Name="GpuResButton" Content="GPU resolution" Style="{StaticResource MainButton}" Click="GpuResButton_Click"/>
