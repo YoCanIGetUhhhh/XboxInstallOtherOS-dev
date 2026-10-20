@@ -699,7 +699,7 @@ namespace XboxVmHost
         private void SlotButton_Click(object sender, RoutedEventArgs e)
         {
             try { File.WriteAllText(SlotCfgPath, (VmSlot % SlotCount + 1).ToString()); } catch { }
-            SettingsMsg.Text = VmName + ": " + (File.Exists(DiskPath) ? "virtual disk " + SizeText(DiskPath) + ". Start Linux from disk uses it." : "no disk yet. Choose the size, then press \"Create disk " + VmName + "\".");
+            SettingsMsg.Text = VmName + ": " + (DiskExists(DiskPath) ? "virtual disk " + SizeText(DiskPath) + ". Start Linux from disk uses it." : "no disk yet. Choose the size, then press \"Create disk " + VmName + "\".");
             RefreshStatus();
         }
 
@@ -750,10 +750,97 @@ namespace XboxVmHost
         {
             try
             {
-                long gb = new FileInfo(path).Length / (1024L * 1024L * 1024L);
-                return gb + " GB";
+                long used = new FileInfo(path).Length;
+                long virt = Qcow2Size(path);
+                if (virt > 0) return (virt / (1024L * 1024L * 1024L)) + " GB, uses " + GbText(used);
+                return (used / (1024L * 1024L * 1024L)) + " GB";
             }
             catch { return "?"; }
+        }
+
+        private static string GbText(long bytes)
+        {
+            return (bytes / (1024.0 * 1024.0 * 1024.0)).ToString("0.0") + " GB";
+        }
+
+        // A disk counts as created only if the file has something in it (1.2.72 could leave a 0-byte file behind).
+        private static bool DiskExists(string path)
+        {
+            try { return File.Exists(path) && new FileInfo(path).Length > 0; } catch { return false; }
+        }
+
+        // Grow-as-needed disks use QEMU's qcow2 format. Returns the disk size Linux sees, or 0 if the file is not qcow2 (a plain raw disk).
+        private static long Qcow2Size(string path)
+        {
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    var h = new byte[32];
+                    if (fs.Read(h, 0, 32) != 32) return 0;
+                    if (h[0] != 0x51 || h[1] != 0x46 || h[2] != 0x49 || h[3] != 0xFB) return 0;
+                    long size = 0;
+                    for (int i = 24; i < 32; i++) size = (size << 8) | h[i];
+                    return size;
+                }
+            }
+            catch { return 0; }
+        }
+
+        // Writes an empty qcow2 disk (version 3, 64 KB clusters): header, refcount table, one refcount block, L1 table.
+        // The file starts at about 256 KB and grows only as Linux writes. Same layout checked with "qemu-img check".
+        private static void WriteEmptyQcow2(string path, long size)
+        {
+            const int C = 65536;
+            long l1 = (size + (long)C * (C / 8) - 1) / ((long)C * (C / 8));
+            int l1Clusters = (int)((l1 * 8 + C - 1) / C);
+            int total = 3 + l1Clusters;
+            var buf = new byte[total * C];
+            int o = 0;
+            Action<long, int> put = (v, n) => { for (int i = n - 1; i >= 0; i--) buf[o++] = (byte)(v >> (8 * i)); };
+            put(0x514649FB, 4);   // magic "QFI\xfb"
+            put(3, 4);            // version 3
+            put(0, 8);            // no backing file
+            put(0, 4);
+            put(16, 4);           // cluster bits: 64 KB clusters
+            put(size, 8);         // disk size Linux sees
+            put(0, 4);            // no encryption
+            put((int)l1, 4);      // L1 entries
+            put(3L * C, 8);       // L1 table offset
+            put(1L * C, 8);       // refcount table offset
+            put(1, 4);            // refcount table clusters
+            put(0, 4);            // snapshots
+            put(0, 8);
+            put(0, 8);            // incompatible features
+            put(0, 8);            // compatible features
+            put(0, 8);            // autoclear features
+            put(4, 4);            // refcount order: 16-bit refcounts
+            put(104, 4);          // header length
+            o = C; put(2L * C, 8);                      // refcount table -> refcount block
+            for (int i = 0; i < total; i++) { o = 2 * C + 2 * i; put(1, 2); }   // every metadata cluster is in use once
+            using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
+                fs.Write(buf, 0, buf.Length);
+        }
+
+        [DllImport("api-ms-win-core-file-l1-1-0.dll", EntryPoint = "GetDiskFreeSpaceExW", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool GetDiskFreeSpaceEx(string dir, out ulong freeForCaller, out ulong total, out ulong totalFree);
+
+        // Free space the app itself can use (the developer storage), not the 750+ GB the Xbox shows for games.
+        private static long FreeBytes()
+        {
+            try
+            {
+                ulong a, t, f;
+                if (GetDiskFreeSpaceEx(ApplicationData.Current.LocalFolder.Path, out a, out t, out f)) return (long)a;
+            }
+            catch { }
+            return -1;
+        }
+
+        private static string FreeText()
+        {
+            long b = FreeBytes();
+            return b < 0 ? "unknown" : GbText(b);
         }
 
         private static FileInfo NewestIso()
@@ -775,11 +862,11 @@ namespace XboxVmHost
                 FileInfo iso = NewestIso();
                 StatusIso.Text = iso == null ? "none yet (use \"Pick ISO file\")"
                     : iso.Name + "  (" + (iso.Length / (1024 * 1024)) + " MB)";
-                bool haveDisk = File.Exists(DiskPath);
+                bool haveDisk = DiskExists(DiskPath);
                 bool haveMedia = File.Exists(MediaPath);
                 StatusDisk.Text = !haveDisk ? "not created yet"
                     : SizeText(DiskPath) + " main disk" + (haveMedia ? " + " + SizeText(MediaPath) + " storage disk" : "");
-                StatusDisk.Text = VmName + ": " + StatusDisk.Text;
+                StatusDisk.Text = VmName + ": " + StatusDisk.Text + "   (free space for the app: " + FreeText() + ")";
                 SlotButton.Content = "Disk: " + VmName + (haveDisk ? " (" + SizeText(DiskPath) + ")" : " (not created)") + " (press to change)";
                 StatusRam.Text = VmRamMb + " MB   (Xbox app limit " + AppLimitMb() + " MB)";
                 StatusNet.Text = (NetOn ? "ON (NAT, 10.0.2.15)" : "off") + (NetOn && PcOn ? ", PC access on port 2222" : "")
@@ -827,17 +914,23 @@ namespace XboxVmHost
             {
                 string path = DiskPath;
                 SLog("=== CREATE DISK " + VmName + " (" + gb + " GB) ===");
-                if (File.Exists(path))
+                SLog("Free space for the app: " + FreeText());
+                if (DiskExists(path))
                 {
                     SLog(VmName + " already has a disk, so nothing was changed.");
                     return;
                 }
-                using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
-                    fs.SetLength((long)gb * 1024L * 1024L * 1024L);
-                SLog("Created " + VmName + ": an empty " + gb + " GB virtual disk.");
+                if (File.Exists(path)) File.Delete(path);   // empty file left over from a failed try
+                WriteEmptyQcow2(path, (long)gb * 1024L * 1024L * 1024L);
+                SLog("Created " + VmName + ": a " + gb + " GB grow-as-needed virtual disk. It uses " + GbText(new FileInfo(path).Length) + " now and only grows as Linux fills it.");
                 SLog("Ready. Now press \"Boot from ISO\" and install Linux onto it.");
             }
-            catch (Exception ex) { SLog("Could not create the disk: " + ex.GetType().Name + ": " + ex.Message); }
+            catch (Exception ex)
+            {
+                SLog("Could not create the disk: " + ex.GetType().Name + ": " + ex.Message);
+                SLog("Free space for the app: " + FreeText());
+                try { if (File.Exists(DiskPath) && !DiskExists(DiskPath)) File.Delete(DiskPath); } catch { }
+            }
             RefreshStatus();
         }
 
@@ -947,7 +1040,7 @@ namespace XboxVmHost
         // Starts Linux from the virtual disk only (no ISO attached).
         private async void BootDiskButton_Click(object sender, RoutedEventArgs e)
         {
-            if (!File.Exists(DiskPath))
+            if (!DiskExists(DiskPath))
             {
                 ResetLog();
                 Log("There is no virtual disk yet. Press \"Create virtual disk\" first, then install Linux onto it with \"Boot from ISO\".");
@@ -977,7 +1070,7 @@ namespace XboxVmHost
             }
             if (!await ConfirmDiscardState()) return;
             var extra = new List<string>();
-            bool haveDisk = File.Exists(DiskPath);
+            bool haveDisk = DiskExists(DiskPath);
             if (haveDisk) AddDisk(extra, DiskPath, 0, false);
             if (haveDisk) AddMedia(extra);
             extra.AddRange(new string[] { "-cdrom", iso.FullName, "-boot", "order=d,menu=on" });
@@ -999,15 +1092,22 @@ namespace XboxVmHost
             int mode = VmDiskMode;
             if (mode == 0)
             {
-                extra.AddRange(new string[] { "-drive", "file=" + path + ",format=raw,if=ide,index=" + index });
+                extra.AddRange(new string[] { "-drive", "file=" + path + "," + DiskFormat(path) + ",if=ide,index=" + index });
                 return;
             }
             string id = "hd" + index;
             string cache = mode == 2 ? "unsafe" : "writeback";
-            extra.AddRange(new string[] { "-drive", "file=" + path + ",format=raw,if=none,id=" + id + ",cache=" + cache });
+            extra.AddRange(new string[] { "-drive", "file=" + path + "," + DiskFormat(path) + ",if=none,id=" + id + ",cache=" + cache });
             // A separate disk thread (iothread), so disk work never holds up QEMU's main loop (screen, GPU, input).
             if (!extra.Contains("iothread,id=io0")) extra.AddRange(new string[] { "-object", "iothread,id=io0" });
             extra.AddRange(new string[] { "-device", "virtio-blk-pci,drive=" + id + ",iothread=io0" + (bootFirst ? ",bootindex=0" : "") });
+        }
+
+        // Old disks are raw; disks made from 1.2.73 are qcow2 (grow-as-needed). The bigger table cache keeps qcow2 quick on disks up to 64 GB,
+        // and discard lets space Linux frees be reused inside the file.
+        private static string DiskFormat(string path)
+        {
+            return Qcow2Size(path) > 0 ? "format=qcow2,l2-cache-size=8M,discard=unmap" : "format=raw";
         }
 
         private void AddMedia(List<string> extra)
