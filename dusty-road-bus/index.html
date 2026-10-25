@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Dusty Road Bus</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+canvas{display:block;width:100vw;height:100vh}
+#touch{display:none;position:fixed;left:0;right:0;bottom:90px;justify-content:space-between;padding:0 14px;pointer-events:none}
+#touch .g{display:flex;gap:10px}
+#touch button{pointer-events:auto;touch-action:none;width:74px;height:74px;border-radius:16px;border:2px solid rgba(255,255,255,.5);background:rgba(0,0,0,.35);color:#fff;font:700 14px system-ui}
+@media (pointer:coarse){#touch{display:flex}}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="touch"><div class="g"><button data-k="left">&#9664;</button><button data-k="right">&#9654;</button></div><div class="g"><button data-k="down">BRAKE</button><button data-k="up">GAS</button></div></div>
+<script>
+(() => {
+'use strict';
+/* ============================ setup ============================ */
+const cv = document.getElementById('game'), ctx = cv.getContext('2d');
+const lcv = document.createElement('canvas'), lctx = lcv.getContext('2d');
+const FONT = 'system-ui, "Segoe UI", Roboto, sans-serif';
+let W = 0, H = 0, U = 1, HOR = 0, PS = 0, camH = 1000, playerZ = 1000, busW = 200;
+const SEG = 200, ROADW = 900, DRAW = 260, FOV = 85;
+const camDepth = 1 / Math.tan(FOV / 2 * Math.PI / 180);
+const MAXSPEED = 4600, ACC = 1000, BRK = 2300, COAST = 420, OFFDEC = 1400;
+const HOURS_PER_SEC = 1 / 16;      // full day = 6.4 minutes
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const mixc = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+function mulberry(s) { return () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  W = cv.width = Math.max(320, Math.floor(innerWidth * dpr));
+  H = cv.height = Math.max(240, Math.floor(innerHeight * dpr));
+  lcv.width = W; lcv.height = H;
+  U = H / 720; PS = W / 2; HOR = Math.round(H * 0.4);
+  const targetHalf = Math.min(0.5 * H, 0.46 * W);
+  camH = ROADW * (0.97 * H - HOR) / targetHalf;
+  playerZ = camDepth * camH * PS / (0.97 * H - HOR);
+  busW = 0.62 * targetHalf;
+}
+addEventListener('resize', resize); resize();
+
+/* ============================ save system ============================ */
+const SAVE_VERSION = 1;
+let save = { v: SAVE_VERSION, best: 0, totalDist: 0, totalStops: 0, totalPax: 0, runs: 0, muted: false, lightMode: 0, run: null };
+const hasDesktop = !!(window.desktop && window.desktop.readSave);
+async function loadSave() {
+  try {
+    let t = hasDesktop ? await window.desktop.readSave() : localStorage.getItem('dustyRoadBus.save');
+    if (t) { const o = JSON.parse(t); if (o && o.v === SAVE_VERSION) save = Object.assign(save, o); }
+  } catch (e) {}
+  muted = !!save.muted; lightMode = save.lightMode | 0;
+}
+let saveBusy = false;
+function writeSave() {
+  const t = JSON.stringify(save);
+  try {
+    if (hasDesktop) { window.desktop.writeSave(t); } else { localStorage.setItem('dustyRoadBus.save', t); }
+  } catch (e) {}
+}
+function snapshotRun() {
+  save.run = {
+    position, playerX, speed, odo, heat, pax, stops: stopsDone, missed, hour, wxState, wxTimer,
+    cloud: wx.cloud, rain: wx.rain, nextStopIn
+  };
+}
+function autosave() { if (state === 'play') { snapshotRun(); writeSave(); } }
+function commitStats(dist, stops, pax) {
+  save.totalDist += dist; save.totalStops += stops; save.totalPax += pax; save.runs++;
+  if (dist > save.best) save.best = dist;
+}
+
+/* ============================ input ============================ */
+const keys = { left: 0, right: 0, up: 0, down: 0 };
+const KMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', Space: 'down' };
+addEventListener('keydown', e => {
+  if (KMAP[e.code]) { keys[KMAP[e.code]] = 1; e.preventDefault(); }
+  if (e.repeat) return;
+  initAudio();
+  if (e.code === 'Enter' || e.code === 'Space') {
+    if (state === 'title') startGame(!!save.run);
+    else if (state === 'dead' && deadT > 1.8) toTitle();
+    else if (state === 'paused') setPaused(false);
+  }
+  if (e.code === 'KeyN' && state === 'title') startGame(false);
+  if (e.code === 'KeyH') { lightMode = (lightMode + 1) % 3; save.lightMode = lightMode; toast('Headlights: ' + ['AUTO', 'ON', 'OFF'][lightMode]); }
+  if (e.code === 'KeyM') { muted = !muted; save.muted = muted; if (master) master.gain.value = muted ? 0 : 0.6; writeSave(); }
+  if (e.code === 'KeyP' || e.code === 'Escape') { if (state === 'play') setPaused(true); else if (state === 'paused') setPaused(false); }
+  if (e.code === 'KeyF' && hasDesktop) window.desktop.fullscreen();
+  if (e.code === 'KeyQ' && hasDesktop && (state === 'title' || state === 'paused')) { autosaveOnExit(); window.desktop.quit(); }
+});
+addEventListener('keyup', e => { if (KMAP[e.code]) { keys[KMAP[e.code]] = 0; e.preventDefault(); } });
+cv.addEventListener('pointerdown', () => {
+  initAudio();
+  if (state === 'title') startGame(!!save.run);
+  else if (state === 'dead' && deadT > 1.8) toTitle();
+  else if (state === 'paused') setPaused(false);
+});
+document.querySelectorAll('#touch button').forEach(b => {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', e => { keys[k] = 1; initAudio(); e.preventDefault(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(n => b.addEventListener(n, () => keys[k] = 0));
+});
+function setPaused(p) { if (p && state === 'play') { state = 'paused'; snapshotRun(); writeSave(); } else if (!p && state === 'paused') state = 'play'; }
+document.addEventListener('visibilitychange', () => { if (document.hidden) setPaused(true); });
+function autosaveOnExit() { if (state === 'play' || state === 'paused') { snapshotRun(); writeSave(); } }
+addEventListener('beforeunload', autosaveOnExit);
+
+/* ============================ audio ============================ */
+let AC = null, master = null, muted = false, A = {};
+function initAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    master = AC.createGain(); master.gain.value = muted ? 0 : 0.6; master.connect(AC.destination);
+    const nb = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate), d = nb.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    A.nb = nb;
+    const noise = () => { const s = AC.createBufferSource(); s.buffer = nb; s.loop = true; s.start(); return s; };
+    const chain = (src, type, f, q, g) => { const fl = AC.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q; const ga = AC.createGain(); ga.gain.value = g; src.connect(fl); fl.connect(ga); ga.connect(master); return { fl, ga }; };
+    A.o1 = AC.createOscillator(); A.o1.type = 'sawtooth'; A.o1.start();
+    A.o2 = AC.createOscillator(); A.o2.type = 'square'; A.o2.start();
+    const eg = AC.createGain(); eg.gain.value = 0; const ef = AC.createBiquadFilter(); ef.type = 'lowpass'; ef.frequency.value = 320;
+    A.o1.connect(ef); const o2g = AC.createGain(); o2g.gain.value = 0.5; A.o2.connect(o2g); o2g.connect(ef); ef.connect(eg); eg.connect(master);
+    A.eng = eg; A.engF = ef;
+    A.rain = chain(noise(), 'bandpass', 2600, 0.4, 0);
+    A.wind = chain(noise(), 'lowpass', 520, 0.7, 0);
+    A.rum = chain(noise(), 'lowpass', 190, 0.7, 0);
+  } catch (e) { AC = null; }
+}
+function tone(f, d, type = 'square', v = 0.12, delay = 0) {
+  if (!AC || muted) return;
+  const t = AC.currentTime + delay, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.value = f;
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + 0.01); g.gain.setValueAtTime(v, t + Math.max(0.011, d - 0.03)); g.gain.linearRampToValueAtTime(0, t + d);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + d + 0.03);
+}
+function burst(dur, f0, f1, v, delay = 0) {
+  if (!AC || muted) return;
+  const t = AC.currentTime + delay, s = AC.createBufferSource(); s.buffer = A.nb;
+  const fl = AC.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.setValueAtTime(f0, t); fl.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  const g = AC.createGain(); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(fl); fl.connect(g); g.connect(master); s.start(t); s.stop(t + dur + 0.05);
+}
+function sfxBoom() { burst(2.2, 2400, 50, 1.0); if (AC && !muted) { const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain(); o.frequency.setValueAtTime(130, t); o.frequency.exponentialRampToValueAtTime(28, t + 1.2); g.gain.setValueAtTime(0.7, t); g.gain.exponentialRampToValueAtTime(0.001, t + 1.3); o.connect(g); g.connect(master); o.start(t); o.stop(t + 1.4); } }
+function sfxThunder() { burst(3.2, 380, 40, 0.8, rnd(0.2, 1.8)); }
+function updateAudio() {
+  if (!AC) return;
+  const t = AC.currentTime, sp = speed / MAXSPEED;
+  const live = state === 'play' || state === 'paused' ? (state === 'paused' ? 0 : 1) : state === 'title' ? 0.4 : 0;
+  A.o1.frequency.setTargetAtTime(36 + sp * 90 + (keys.up ? 8 : 0), t, 0.08);
+  A.o2.frequency.setTargetAtTime(18 + sp * 45, t, 0.08);
+  A.eng.gain.setTargetAtTime(live * (0.07 + 0.07 * sp + (loading() ? 0.01 : 0)), t, 0.1);
+  A.engF.frequency.setTargetAtTime(240 + sp * 420, t, 0.1);
+  A.rain.ga.gain.setTargetAtTime(wx.rain * 0.2, t, 0.6);
+  A.wind.ga.gain.setTargetAtTime((0.02 + 0.12 * sp + 0.18 * wx.storm) * (state === 'dead' ? 0.3 : 1), t, 0.4);
+  A.rum.ga.gain.setTargetAtTime(state === 'play' && isOff ? 0.45 * (0.25 + sp) : 0, t, 0.1);
+}
+
+/* ============================ track ============================ */
+const segments = [];
+let N = 0, trackLen = 0;
+const easeIn = (a, b, p) => a + (b - a) * p * p;
+const easeInOut = (a, b, p) => a + (b - a) * ((-Math.cos(p * Math.PI) / 2) + 0.5);
+const lastY = () => segments.length ? segments[segments.length - 1].p2.world.y : 0;
+function addSeg(curve, y) {
+  const n = segments.length;
+  segments.push({
+    index: n, curve, sprites: [], pw1: 0, pw2: 0, fence: 0, wire: 0, gv: 0, zs: false, ze: false, fog: 0, clip: 0,
+    p1: { world: { x: 0, y: lastY(), z: n * SEG }, camera: {}, screen: {} },
+    p2: { world: { x: 0, y: y, z: (n + 1) * SEG }, camera: {}, screen: {} }
+  });
+}
+function addRoad(enter, hold, leave, curve, dy) {
+  const sy = lastY(), ey = sy + dy, total = enter + hold + leave;
+  for (let n = 0; n < enter; n++) addSeg(easeIn(0, curve, n / enter), easeInOut(sy, ey, (n + 1) / total));
+  for (let n = 0; n < hold; n++) addSeg(curve, easeInOut(sy, ey, (enter + n + 1) / total));
+  for (let n = 0; n < leave; n++) addSeg(easeInOut(curve, 0, n / leave), easeInOut(sy, ey, (enter + hold + n + 1) / total));
+}
+function buildTrack() {
+  const R = mulberry(20240611), rr = (a, b) => a + R() * (b - a);
+  addRoad(30, 40, 30, 0, 0);
+  while (segments.length < 5600) {
+    const enter = rr(25, 50) | 0, hold = rr(20, 80) | 0, leave = rr(25, 50) | 0;
+    const curve = R() < 0.28 ? 0 : (R() < 0.5 ? -1 : 1) * rr(0.8, 2.6);
+    let dy = (R() < 0.5 ? -1 : 1) * rr(0, 3200) * (R() < 0.55 ? 1 : 0.3);
+    if (Math.abs(lastY() + dy) > 5500) dy = -dy;
+    addRoad(enter, hold, leave, curve, dy);
+    if (curve !== 0 && R() < 0.25) addRoad(enter, hold >> 1, leave, -curve * rr(0.6, 1), 0);
+  }
+  addRoad(40, 40, 40, 0, -lastY());
+  N = segments.length; trackLen = N * SEG;
+  // scenery
+  let sec = 0, fence = 0, pole = 0, biome = 0;
+  for (let i = 0; i < N; i++) {
+    const seg = segments[i], sp = seg.sprites;
+    seg.gv = (R() - 0.5) * 14;
+    if (i >= sec) {
+      sec = i + ((rr(90, 260) / 14) | 0) * 14 + 14;
+      const f = R(); fence = f < 0.45 ? 0 : f < 0.65 ? -1 : f < 0.85 ? 1 : 2;
+      pole = R() < 0.45 ? (R() < 0.5 ? -1 : 1) : 0; biome = (R() * 3) | 0;
+    }
+    seg.fence = fence; seg.wire = pole;
+    if (fence && i % 2 === 0) { if (fence !== 1) sp.push({ t: 'post', off: -1.5 }); if (fence !== -1) sp.push({ t: 'post', off: 1.5 }); }
+    if (pole && i % 14 === 0) sp.push({ t: 'pole', off: pole * 1.75 });
+    for (const side of [-1, 1]) {
+      const r = R(), v = R();
+      if (biome === 0) {
+        if (r < 0.42) sp.push({ t: R() < 0.85 ? 'tree' : 'dead', off: side * rr(1.9, 5.5), v });
+        else if (r < 0.55) sp.push({ t: 'bush', off: side * rr(1.2, 3), v });
+      } else if (biome === 1) {
+        if (r < 0.03) sp.push({ t: 'bale', off: side * rr(2, 4), v });
+        else if (r < 0.055) { const o = side * rr(2.2, 5); sp.push({ t: 'cow', off: o, v }, { t: 'cow', off: o + side * 0.5, v: 1 - v }); }
+        else if (r < 0.06) sp.push({ t: 'barn', off: side * rr(4, 6.5), v });
+        else if (r < 0.065) sp.push({ t: 'mill', off: side * rr(3.5, 6), v });
+        else if (r < 0.09) sp.push({ t: 'tree', off: side * rr(2.4, 6), v });
+        else if (r < 0.2) sp.push({ t: 'bush', off: side * rr(1.2, 3), v });
+      } else {
+        if (r < 0.06) sp.push({ t: 'rock', off: side * rr(1.2, 4), v });
+        else if (r < 0.2) sp.push({ t: 'bush', off: side * rr(1.2, 3.5), v });
+        else if (r < 0.26) sp.push({ t: 'dead', off: side * rr(1.8, 5), v });
+        else if (r < 0.29) sp.push({ t: 'tree', off: side * rr(2.4, 6), v });
+      }
+    }
+  }
+}
+buildTrack();
+const findSeg = z => segments[Math.floor(z / SEG) % N];
+
+/* ============================ sky / weather ============================ */
+const SKY = [
+  [0, [40, 55, 120], [95, 115, 175], 0.05], [5, [44, 60, 128], [105, 120, 180], 0.07],
+  [6, [90, 105, 170], [250, 160, 115], 0.38], [7.5, [100, 160, 228], [245, 212, 175], 0.82],
+  [10, [78, 148, 232], [188, 216, 242], 1], [16, [82, 150, 230], [198, 218, 238], 1],
+  [17.8, [100, 125, 195], [250, 188, 125], 0.85], [19, [75, 75, 140], [240, 125, 95], 0.42],
+  [20.3, [45, 58, 125], [110, 100, 150], 0.12], [24, [40, 55, 120], [95, 115, 175], 0.05]
+];
+function sampleSky(h) {
+  let i = 0; while (i < SKY.length - 2 && h >= SKY[i + 1][0]) i++;
+  const a = SKY[i], b = SKY[i + 1], t = clamp((h - a[0]) / (b[0] - a[0]), 0, 1);
+  return { top: mixc(a[1], b[1], t), hor: mixc(a[2], b[2], t), amb: lerp(a[3], b[3], t) };
+}
+const WS = {
+  clear: { cloud: 0.06, rain: 0, next: ['cloudy'] },
+  cloudy: { cloud: 0.55, rain: 0, next: ['clear', 'rain', 'clear'] },
+  rain: { cloud: 0.85, rain: 0.55, next: ['cloudy', 'storm', 'storm'] },
+  storm: { cloud: 1, rain: 1, next: ['rain'] }
+};
+let hour = 9, wxState = 'clear', wxTimer = 35, wx = { cloud: 0.06, rain: 0, storm: 0 };
+let lightning = 0, boltT = 0, bolt = null, lightTimer = 6, lightLevel = 0, lightMode = 0, wind = 0.3;
+let env = {};
+function updateWeather(dt) {
+  hour = (hour + dt * HOURS_PER_SEC) % 24;
+  wxTimer -= dt;
+  if (wxTimer <= 0) { const n = WS[wxState].next; wxState = n[(Math.random() * n.length) | 0]; wxTimer = rnd(35, 65); }
+  const tg = WS[wxState], k = 1 - Math.exp(-dt / 4.5);
+  wx.cloud += (tg.cloud - wx.cloud) * k; wx.rain += (tg.rain - wx.rain) * k;
+  wx.storm = clamp((wx.rain - 0.45) / 0.55, 0, 1);
+  wind = 0.3 + 0.7 * wx.storm * (0.6 + 0.4 * Math.sin(T * 0.7));
+  lightning = Math.max(0, lightning - dt * 3.2); boltT = Math.max(0, boltT - dt);
+  if (wx.storm > 0.5) {
+    lightTimer -= dt;
+    if (lightTimer <= 0) {
+      lightning = 1; boltT = 0.3; lightTimer = rnd(2.5, 9) / (0.5 + wx.storm);
+      const bx = rnd(0.1, 0.9) * W; bolt = [[bx, 0]]; let x = bx, y = 0;
+      while (y < HOR) { x += rnd(-35, 35) * U; y += rnd(25, 55) * U; bolt.push([x, Math.min(y, HOR)]); }
+      setTimeout(() => { lightning = Math.max(lightning, 0.8); }, 130);
+      sfxThunder();
+    }
+  }
+}
+function updateEnv() {
+  const s = sampleSky(hour), cl = wx.cloud;
+  const sc2 = 0.35 + 0.65 * s.amb;
+  const top = mixc(s.top, [62 * sc2, 70 * sc2, 84 * sc2], cl * 0.8);
+  const hor = mixc(s.hor, [112 * sc2, 118 * sc2, 128 * sc2], cl * 0.8);
+  let ambEff = s.amb * (1 - 0.5 * cl * (0.6 + 0.4 * wx.rain));
+  ambEff = Math.min(1, ambEff + lightning * 0.6);
+  env = { top, hor, amb: s.amb, ambEff, dark: clamp((1 - ambEff) * 0.9, 0, 0.82),
+    fog: mixc(hor, [215, 195, 160], 0.28 * (1 - cl) * s.amb),
+    fogDen: 3.0 + 2.5 * wx.rain + cl };
+  const lon = lightMode === 1 || (lightMode === 0 && ambEff < 0.62);
+  lightLevel += ((lon ? 1 : 0) - lightLevel) * Math.min(1, dtGlobal * 6);
+}
+
+/* ============================ game state ============================ */
+let state = 'title', T = 0, dtGlobal = 0.016, deadT = 0, deadReason = '';
+let position = 0, playerX = 0, speed = 0, steer = 0, odo = 0, heat = 0, pax = 0, stopsDone = 0, missed = 0;
+let isOff = false, roll = 0, shake = 0, bgOff = 0, beepT = 0, warnT = 0, nextStopIn = 30, stop = null, braking = false, autoT = 0, busPhase = 0, saveT = 0;
+let toasts = [], parts = [], fx = [], drops = [], stars = [], clouds = [], walkers = [];
+for (let i = 0; i < 300; i++) drops.push({ x: Math.random(), y: Math.random(), v: rnd(900, 1500), l: rnd(14, 30) });
+for (let i = 0; i < 150; i++) stars.push({ x: Math.random(), y: Math.random() * 0.95, s: rnd(0.6, 1.8), p: Math.random() * 6 });
+for (let i = 0; i < 18; i++) clouds.push({ x: Math.random(), y: rnd(0.04, 0.34), s: rnd(0.7, 1.5), sp: rnd(0.6, 1.4), thr: i / 18 });
+let cloudOff = 0;
+const loading = () => stop && stop.state === 'loading';
+const toast = (s, c) => toasts.push({ s, t: 3.2, c: c || '#fff' });
+
+function resetRun() {
+  position = 0; playerX = 0; speed = 0; steer = 0; odo = 0; heat = 0; pax = 0; stopsDone = 0; missed = 0;
+  hour = 9; wxState = 'clear'; wxTimer = 30; wx.cloud = 0.06; wx.rain = 0; nextStopIn = 28; clearStop(true);
+  parts = []; fx = []; walkers = []; toasts = [];
+}
+function startGame(cont) {
+  initAudio();
+  resetRun();
+  if (cont && save.run) {
+    const r = save.run;
+    position = r.position % trackLen; playerX = r.playerX; speed = 0; odo = r.odo; heat = Math.min(r.heat, 0.9); pax = r.pax;
+    stopsDone = r.stops; missed = r.missed; hour = r.hour; wxState = WS[r.wxState] ? r.wxState : 'clear'; wxTimer = r.wxTimer;
+    wx.cloud = r.cloud; wx.rain = r.rain; nextStopIn = r.nextStopIn || 25;
+    toast('Run restored — drive on!', '#9fe870');
+  } else { save.run = null; toast('Hold UP/W to drive. Keep it on the road!'); }
+  state = 'play'; saveT = 0;
+}
+function toTitle() { state = 'title'; resetRun(); position = rnd(0, trackLen); speed = 1800; }
+function explode(reason) {
+  state = 'dying'; deadT = 0; deadReason = reason || 'Engine blew up!'; shake = 1;
+  sfxBoom();
+  const cx = W / 2, cy = busBaseY() - busW * 0.5;
+  for (let i = 0; i < 100; i++) { const a = rnd(0, 6.28), v = rnd(60, 520) * U; fx.push({ k: 'f', x: cx + rnd(-30, 30) * U, y: cy + rnd(-30, 30) * U, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 140 * U, life: 0, max: rnd(0.6, 1.6), r: rnd(12, 46) * U }); }
+  for (let i = 0; i < 60; i++) fx.push({ k: 's', x: cx + rnd(-60, 60) * U, y: cy + rnd(-40, 40) * U, vx: rnd(-90, 90) * U, vy: rnd(-260, -60) * U, life: 0, max: rnd(1.5, 3.4), r: rnd(20, 60) * U });
+  for (let i = 0; i < 22; i++) fx.push({ k: 'd', x: cx + rnd(-60, 60) * U, y: cy, vx: rnd(-420, 420) * U, vy: rnd(-780, -200) * U, life: 0, max: 3, w: rnd(10, 40) * U, h: rnd(8, 26) * U, rot: rnd(0, 6), vr: rnd(-9, 9), c: [[228, 196, 90], [46, 108, 112], [60, 60, 64]][i % 3] });
+  commitStats(odo / 180, stopsDone, 0); save.run = null; writeSave();
+}
+
+/* ============================ bus stops ============================ */
+function clearStop(silent) {
+  if (!stop) return;
+  for (let i = 0; i < stop.len; i++) { const s = segments[(stop.start + i) % N]; s.pw1 = s.pw2 = 0; s.zs = s.ze = false; }
+  for (const [seg, o] of stop.spr) { const j = seg.sprites.indexOf(o); if (j >= 0) seg.sprites.splice(j, 1); }
+  stop = null;
+}
+function spawnStop(pidx) {
+  const len = 16, start = (pidx + 400) % N;
+  const modes = pax > 0 ? ['board', 'alight', 'both'] : ['board'];
+  const mode = modes[(Math.random() * modes.length) | 0];
+  stop = { start, len, mode, state: 'ahead', prog: 0, need: 3.0, spr: [], done: false };
+  const ramp = i => 0.95 * clamp(Math.min(i, len - i) / 4, 0, 1);
+  for (let i = 0; i < len; i++) {
+    const s = segments[(start + i) % N];
+    s.pw1 = ramp(i); s.pw2 = ramp(i + 1);
+    s.sprites = s.sprites.filter(o => !(o.off > 0.9 && o.off < 4.5));
+    if (s.fence === 1) s.fence = 0; else if (s.fence === 2) s.fence = -1;
+    if (s.wire === 1) s.wire = 0;
+  }
+  segments[start].zs = true; segments[(start + len - 1) % N].ze = true;
+  const add = (i, o) => { const s = segments[(start + i) % N]; s.sprites.push(o); stop.spr.push([s, o]); };
+  add(3, { t: 'sign', off: 2.3 }); add(9, { t: 'shelter', off: 3.0 });
+  if (mode !== 'alight') { stop.person = { t: 'person', off: 2.0, v: Math.random() }; add(10, stop.person); }
+  toast('Bus stop ahead — pull in on the RIGHT and stop!', '#ffd34d');
+  tone(880, 0.15, 'sine', 0.15); tone(1175, 0.25, 'sine', 0.15, 0.17);
+}
+function updateStops(dt, pidx) {
+  if (!stop) {
+    if (speed > 800) nextStopIn -= dt;
+    if (nextStopIn <= 0) spawnStop(pidx);
+    return;
+  }
+  const rel = (pidx - stop.start + N) % N, inZone = rel < stop.len;
+  const settled = inZone && speed < 450 && playerX > 0.9;
+  if (stop.state === 'ahead') {
+    if (settled) { stop.state = 'loading'; tone(660, 0.12, 'sine', 0.12); }
+    else if (rel >= stop.len && rel < N / 2) missStop();
+  } else if (stop.state === 'loading') {
+    if (settled) {
+      stop.prog += dt;
+      if (stop.mode !== 'board' && !stop.walker && stop.prog > 1.0 && pax > 0) {
+        stop.walker = { seg: segments[pidx], o: { t: 'person', off: 1.5, v: Math.random(), walk: true } };
+        stop.walker.seg.sprites.push(stop.walker.o); walkers.push(stop.walker);
+      }
+      if (stop.prog >= stop.need) finishStop();
+    } else if (rel >= stop.len) missStop();
+    else stop.prog = Math.max(0, stop.prog - dt * 0.6);
+  } else if (rel >= stop.len + 40 && rel < N / 2) clearStop();
+}
+function finishStop() {
+  let on = 0, off = 0;
+  if (stop.mode !== 'alight') on = 1 + ((Math.random() * 3) | 0);
+  if (stop.mode !== 'board') off = Math.min(pax, 1 + ((Math.random() * 3) | 0));
+  pax = clamp(pax - off + on, 0, 20); stopsDone++; save.totalPax += on;
+  if (stop.person) { const j = stop.spr.findIndex(a => a[1] === stop.person); if (j >= 0) { const [s, o] = stop.spr[j]; s.sprites.splice(s.sprites.indexOf(o), 1); } }
+  stop.state = 'done'; nextStopIn = rnd(30, 50);
+  toast((on ? on + ' boarded ' : '') + (off ? off + ' got off ' : '') + '— go go go!', '#9fe870');
+  tone(784, 0.12, 'sine', 0.15); tone(1047, 0.3, 'sine', 0.15, 0.13);
+  snapshotRun(); writeSave();
+}
+function missStop() {
+  stop.state = 'missed'; missed++; nextStopIn = rnd(25, 40);
+  toast('Missed the stop! ' + missed + '/3 complaints', '#ff6b5a'); tone(180, 0.5, 'sawtooth', 0.15);
+  if (stop.person) { const j = stop.spr.findIndex(a => a[1] === stop.person); if (j >= 0) { const [s, o] = stop.spr[j]; s.sprites.splice(s.sprites.indexOf(o), 1); } }
+  if (missed >= 3) { state = 'dying'; deadT = 0; deadReason = 'Too many missed stops — you\'re fired!'; commitStats(odo / 180, stopsDone, 0); save.run = null; writeSave(); }
+}
+
+/* ============================ update ============================ */
+function update(dt) {
+  T += dt; dtGlobal = dt;
+  updateWeather(dt); updateEnv();
+  cloudOff += dt * (0.004 + wind * 0.01);
+  const sl = state === 'play' || state === 'dying' || state === 'dead' || state === 'title' ? 1 : 0;
+  const sp = speed / MAXSPEED;
+  const ps = findSeg(position + playerZ), pp = ((position + playerZ) % SEG) / SEG, pidx = ps.index;
+  if (state === 'play') updateBus(dt, ps, pp, pidx);
+  else if (state === 'title') {
+    speed = Math.min(speed + 800 * dt, 2200); playerX += (Math.sin(T * 0.3) * 0.25 - playerX) * dt;
+    position = (position + speed * dt) % trackLen;
+  } else if (state === 'dying' || state === 'dead') {
+    speed = Math.max(0, speed - 2600 * dt); position = (position + speed * dt) % trackLen; deadT += dt;
+    if (state === 'dying' && deadT > 1.4) state = 'dead';
+    if (deadT < 5 && Math.random() < 0.5) fx.push({ k: Math.random() < 0.5 ? 'f' : 's', x: W / 2 + rnd(-60, 60) * U, y: busBaseY() - busW * 0.5, vx: rnd(-30, 30) * U, vy: rnd(-160, -60) * U, life: 0, max: rnd(0.6, 1.4), r: rnd(10, 30) * U });
+  }
+  bgOff += ps.curve * sp * dt * 120;
+  // walkers
+  for (let i = walkers.length - 1; i >= 0; i--) { const w = walkers[i]; w.o.off += dt * 0.25; if (w.o.off > 3.5) { const j = w.seg.sprites.indexOf(w.o); if (j >= 0) w.seg.sprites.splice(j, 1); walkers.splice(i, 1); } }
+  // rain
+  const slant = 0.12 + wind * 0.5;
+  for (const d of drops) { d.y += d.v * U * dt / H; d.x += slant * d.v * U * dt / W; if (d.y > 1) { d.y = -0.05; d.x = Math.random(); } if (d.x > 1) d.x -= 1; }
+  // particles
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.r += p.gr * dt; if (p.life >= p.max) parts.splice(i, 1); }
+  for (let i = fx.length - 1; i >= 0; i--) { const p = fx[i]; p.life += dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.k === 'd') { p.vy += 900 * U * dt; p.rot += p.vr * dt; } else if (p.k === 's') p.r += 18 * U * dt; else p.r *= 1 - dt * 1.2; if (p.life >= p.max) fx.splice(i, 1); }
+  for (let i = toasts.length - 1; i >= 0; i--) { toasts[i].t -= dt; if (toasts[i].t <= 0) toasts.splice(i, 1); }
+  shake = Math.max(0, shake - dt * 0.9);
+  updateAudio();
+}
+function updateBus(dt, ps, pp, pidx) {
+  const sp = speed / MAXSPEED;
+  const steerIn = keys.right - keys.left;
+  steer += (steerIn - steer) * clamp(dt * 8, 0, 1);
+  const pw = lerp(ps.pw1, ps.pw2, pp);
+  isOff = playerX < -0.7 || playerX > 0.7 + pw;
+  const stoppedLoad = loading();
+  braking = !!keys.down;
+  const maxS = isOff ? MAXSPEED * 0.5 : MAXSPEED;
+  const prev = speed;
+  if (keys.up) speed += ACC * dt; else if (keys.down) speed -= BRK * dt; else speed -= COAST * dt;
+  if (speed > maxS) speed = Math.max(maxS, speed - OFFDEC * dt);
+  speed = clamp(speed, 0, MAXSPEED);
+  if (speed < prev - 300 * dt) braking = true;
+  // steering, curves and the constant creep to the LEFT
+  const dx = dt * 2.1 * sp;
+  playerX += dx * steer;
+  playerX -= dx * sp * ps.curve * 0.22;
+  const diff = 1 + Math.min(0.7, odo / 180 / 6000);
+  const drift = (0.05 + 0.04 * (0.5 + 0.5 * Math.sin(T * 0.3))) * diff + wx.storm * 0.05 * (0.5 + 0.5 * Math.sin(T * 0.9));
+  playerX -= drift * dt * (0.25 + sp);
+  playerX = clamp(playerX, -3, 3);
+  position += speed * dt; if (position >= trackLen) position -= trackLen;
+  odo += speed * dt; busPhase += speed * dt * 0.01;
+  roll += ((steer * 0.035 * sp + ps.curve * sp * 0.012) - roll) * clamp(dt * 6, 0, 1);
+  // heat
+  if (isOff) heat += (0.052 + 0.025 * sp) * dt;
+  else if (stoppedLoad) heat += 0.07 * dt;
+  else heat -= (speed > 100 ? 0.025 + 0.035 * sp : 0.01) * dt;
+  heat = clamp(heat, 0, 1.0001);
+  // warnings
+  if (isOff) {
+    beepT -= dt; shake = Math.max(shake, 0.15 + 0.3 * sp);
+    if (beepT <= 0) { tone(1000, 0.13, 'square', 0.14); beepT = lerp(0.5, 0.16, heat); }
+  } else beepT = 0;
+  if (!isOff && heat > 0.85) { warnT -= dt; if (warnT <= 0) { tone(640, 0.2, 'triangle', 0.14); warnT = 0.8; } }
+  // dust
+  const rate = (isOff ? 60 : 22) * sp * (1 - wx.rain * 0.6);
+  if (Math.random() < rate * dt) {
+    const s = Math.random() < 0.5 ? -1 : 1, c = isOff ? [150, 140, 80] : [196, 168, 120];
+    parts.push({ x: W / 2 + s * busW * 0.4, y: busBaseY() - busW * 0.08, vx: s * rnd(20, 90) * U, vy: rnd(-30, 20) * U, r: busW * 0.07, gr: busW * 0.35, life: 0, max: rnd(0.7, 1.4), c, a: isOff ? 0.45 : 0.3 });
+  }
+  if (heat > 0.55 && Math.random() < (heat - 0.5) * 18 * dt) {
+    parts.push({ x: W / 2 + rnd(-0.3, 0.3) * busW, y: busBaseY() - busW * 1.05, vx: rnd(-15, 15) * U, vy: rnd(-150, -80) * U, r: busW * 0.06, gr: busW * 0.3, life: 0, max: rnd(0.8, 1.5), c: heat > 0.85 ? [60, 58, 56] : [235, 235, 235], a: 0.3 + heat * 0.4 });
+  }
+  updateStops(dt, pidx);
+  saveT += dt; if (saveT > 6) { saveT = 0; autosave(); }
+  if (heat >= 1) explode('Engine blew up!');
+}
+
+/* ============================ rendering helpers ============================ */
+let WG = 0, WD = 1, FR = 0, FG = 0, FB = 0, SF = 0;
+function sc(r, g, b, m) {
+  const l = (r + g + b) / 3; r += (l - r) * WG; g += (l - g) * WG; b += (l - b) * WG;
+  const k = WD * (m || 1); r *= k; g *= k; b *= k;
+  r += (FR - r) * SF; g += (FG - g) * SF; b += (FB - b) * SF;
+  return 'rgb(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ')';
+}
+const rgbs = (c, m = 1) => 'rgb(' + (c[0] * m | 0) + ',' + (c[1] * m | 0) + ',' + (c[2] * m | 0) + ')';
+function project(p, camX, camY, camZ) {
+  p.camera.x = -camX; p.camera.y = p.world.y - camY; p.camera.z = p.world.z - camZ;
+  const s = camDepth / p.camera.z;
+  p.screen.k = s * PS;
+  p.screen.x = Math.round(W / 2 + s * p.camera.x * PS);
+  p.screen.y = Math.round(HOR - s * p.camera.y * PS);
+  p.screen.w = Math.round(s * ROADW * PS);
+}
+function quad(x1, y1, x2, y2, x3, y3, x4, y4, col) { ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.lineTo(x4, y4); ctx.closePath(); ctx.fill(); }
+const circ = (x, y, r) => { ctx.beginPath(); ctx.arc(x, y, Math.max(0, r), 0, 6.2832); ctx.fill(); };
+const ell = (x, y, rx, ry) => { ctx.beginPath(); ctx.ellipse(x, y, Math.max(0, rx), Math.max(0, ry), 0, 0, 6.2832); ctx.fill(); };
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+const busBaseY = () => Math.round(H * 0.97);
+
+/* ============================ sprites ============================ */
+const SP = {
+  tree(x, y, k, o) {
+    const h = (1700 + o.v * 1100) * k, tw = h * 0.045;
+    ctx.fillStyle = sc(86, 66, 48); ctx.beginPath(); ctx.moveTo(x - tw, y); ctx.lineTo(x - tw * 0.55, y - h * 0.62); ctx.lineTo(x + tw * 0.55, y - h * 0.62); ctx.lineTo(x + tw, y); ctx.fill();
+    const R = h * 0.26, cy = y - h * 0.7;
+    ctx.fillStyle = sc(88, 100, 46); circ(x - R * 0.7, cy + R * 0.25, R * 0.8); circ(x + R * 0.75, cy + R * 0.2, R * 0.78); circ(x, cy - R * 0.35, R * 0.95);
+    ctx.fillStyle = sc(112, 124, 58); circ(x - R * 0.3, cy - R * 0.55, R * 0.55); circ(x + R * 0.45, cy - R * 0.1, R * 0.5);
+  },
+  dead(x, y, k, o) {
+    const h = (1300 + o.v * 700) * k; ctx.strokeStyle = sc(78, 64, 52); ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(1, h * 0.05); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + h * 0.03, y - h * 0.65); ctx.stroke();
+    ctx.lineWidth = Math.max(1, h * 0.03); ctx.beginPath();
+    ctx.moveTo(x + h * 0.02, y - h * 0.4); ctx.lineTo(x - h * 0.22, y - h * 0.62); ctx.moveTo(x + h * 0.03, y - h * 0.55); ctx.lineTo(x + h * 0.24, y - h * 0.8);
+    ctx.moveTo(x + h * 0.03, y - h * 0.65); ctx.lineTo(x - h * 0.06, y - h * 0.95); ctx.stroke();
+  },
+  bush(x, y, k, o) { const s = (300 + o.v * 250) * k; ctx.fillStyle = sc(104, 112, 58); circ(x - s * 0.5, y - s * 0.35, s * 0.45); circ(x + s * 0.5, y - s * 0.3, s * 0.4); ctx.fillStyle = sc(130, 134, 68); circ(x, y - s * 0.55, s * 0.55); },
+  rock(x, y, k, o) { const s = (250 + o.v * 300) * k; ctx.fillStyle = sc(118, 108, 98); ctx.beginPath(); ctx.moveTo(x - s, y); ctx.lineTo(x - s * 0.6, y - s * 0.7); ctx.lineTo(x + s * 0.2, y - s * 0.9); ctx.lineTo(x + s, y - s * 0.2); ctx.lineTo(x + s * 1.1, y); ctx.fill(); ctx.fillStyle = sc(146, 136, 124); ctx.beginPath(); ctx.moveTo(x - s * 0.6, y - s * 0.7); ctx.lineTo(x + s * 0.2, y - s * 0.9); ctx.lineTo(x + s * 0.3, y - s * 0.5); ctx.lineTo(x - s * 0.4, y - s * 0.4); ctx.fill(); },
+  post(x, y, k) { const h = 430 * k; ctx.fillStyle = sc(98, 78, 58); ctx.fillRect(x - 9 * k, y - h, 18 * k, h); },
+  pole(x, y, k) {
+    const h = 1900 * k; ctx.fillStyle = sc(92, 72, 54); ctx.fillRect(x - h * 0.012, y - h, h * 0.024, h);
+    ctx.fillRect(x - h * 0.12, y - h * 0.97, h * 0.24, h * 0.016);
+    ctx.fillStyle = sc(200, 200, 190); for (const d of [-0.11, 0, 0.11]) ctx.fillRect(x + h * d - h * 0.006, y - h * 0.985, h * 0.012, h * 0.016);
+  },
+  bale(x, y, k, o) { const r = 230 * k; ctx.fillStyle = sc(206, 178, 96); circ(x, y - r, r); ctx.strokeStyle = sc(170, 140, 70); ctx.lineWidth = Math.max(1, r * 0.08); ctx.beginPath(); ctx.arc(x, y - r, r * 0.65, 0, 6.28); ctx.arc(x, y - r, r * 0.3, 0, 6.28); ctx.stroke(); },
+  cow(x, y, k, o) {
+    const f = o.v < 0.5 ? 1 : -1, s = k;
+    ctx.fillStyle = sc(236, 232, 222); for (const lx of [-170, -90, 100, 180]) ctx.fillRect(x + lx * s - 14 * s, y - 150 * s, 28 * s, 150 * s);
+    ell(x, y - 250 * s, 230 * s, 120 * s); ell(x + f * 250 * s, y - 310 * s, 80 * s, 62 * s);
+    ctx.fillStyle = sc(44, 38, 36); ell(x - 60 * s, y - 280 * s, 70 * s, 50 * s); ell(x + 110 * s, y - 230 * s, 50 * s, 40 * s); ell(x + f * 280 * s, y - 330 * s, 38 * s, 30 * s);
+  },
+  barn(x, y, k) {
+    const w = 1800 * k, h = 900 * k;
+    ctx.fillStyle = sc(150, 56, 46); ctx.fillRect(x - w / 2, y - h, w, h);
+    ctx.fillStyle = sc(84, 76, 72); ctx.beginPath(); ctx.moveTo(x - w * 0.56, y - h); ctx.lineTo(x, y - h - w * 0.26); ctx.lineTo(x + w * 0.56, y - h); ctx.fill();
+    ctx.fillStyle = sc(124, 42, 36); ctx.fillRect(x - w * 0.14, y - h * 0.62, w * 0.28, h * 0.62);
+    ctx.strokeStyle = sc(228, 222, 208); ctx.lineWidth = Math.max(1, w * 0.012); ctx.strokeRect(x - w * 0.14, y - h * 0.62, w * 0.28, h * 0.62);
+    ctx.beginPath(); ctx.moveTo(x - w * 0.14, y - h * 0.62); ctx.lineTo(x + w * 0.14, y); ctx.moveTo(x + w * 0.14, y - h * 0.62); ctx.lineTo(x - w * 0.14, y); ctx.stroke();
+    ctx.fillStyle = sc(184, 180, 166); ctx.fillRect(x + w * 0.6, y - 1500 * k, 320 * k, 1500 * k); ctx.fillStyle = sc(150, 150, 150); ctx.beginPath(); ctx.arc(x + w * 0.6 + 160 * k, y - 1500 * k, 160 * k, Math.PI, 0); ctx.fill();
+  },
+  mill(x, y, k) {
+    const h = 2300 * k; ctx.fillStyle = sc(120, 118, 112); ctx.beginPath(); ctx.moveTo(x - h * 0.09, y); ctx.lineTo(x - h * 0.03, y - h); ctx.lineTo(x + h * 0.03, y - h); ctx.lineTo(x + h * 0.09, y); ctx.fill();
+    ctx.save(); ctx.translate(x, y - h); ctx.rotate(T * (0.5 + wind * 2.5)); ctx.fillStyle = sc(170, 166, 156);
+    for (let i = 0; i < 8; i++) { ctx.rotate(Math.PI / 4); ctx.fillRect(h * 0.03, -h * 0.018, h * 0.42, h * 0.036); }
+    ctx.restore(); ctx.fillStyle = sc(90, 88, 84); circ(x, y - h, h * 0.03);
+  },
+  sign(x, y, k) {
+    ctx.fillStyle = sc(110, 112, 116); ctx.fillRect(x - 15 * k, y - 1300 * k, 30 * k, 1300 * k);
+    ctx.fillStyle = sc(36, 92, 168); rr(x - 200 * k, y - 1300 * k, 400 * k, 320 * k, 30 * k); ctx.fill();
+    ctx.strokeStyle = sc(240, 240, 240); ctx.lineWidth = Math.max(1, 12 * k); ctx.stroke();
+    if (200 * k > 9) { ctx.fillStyle = sc(245, 245, 245); ctx.font = '700 ' + (170 * k) + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('BUS', x, y - 1140 * k); }
+  },
+  shelter(x, y, k) {
+    ctx.fillStyle = sc(150, 170, 180); ctx.globalAlpha = 0.55; ctx.fillRect(x - 380 * k, y - 760 * k, 760 * k, 700 * k); ctx.globalAlpha = 1;
+    ctx.fillStyle = sc(86, 66, 52); ctx.fillRect(x - 450 * k, y - 800 * k, 900 * k, 60 * k); ctx.fillRect(x - 400 * k, y - 760 * k, 36 * k, 760 * k); ctx.fillRect(x + 364 * k, y - 760 * k, 36 * k, 760 * k);
+    ctx.fillStyle = sc(110, 80, 52); ctx.fillRect(x - 300 * k, y - 280 * k, 600 * k, 40 * k);
+  },
+  person(x, y, k, o) {
+    const s = k * 1.2, bob = o.walk ? Math.abs(Math.sin(T * 7)) * 8 * s : Math.sin(T * 2 + o.v * 9) * 3 * s;
+    const coat = [[180, 60, 50], [60, 100, 160], [70, 130, 80], [200, 160, 50]][(o.v * 4) | 0];
+    const sw = o.walk ? Math.sin(T * 7) * 26 * s : 0;
+    ctx.fillStyle = sc(50, 50, 60); ctx.fillRect(x - 38 * s + sw, y - 170 * s, 30 * s, 170 * s); ctx.fillRect(x + 8 * s - sw, y - 170 * s, 30 * s, 170 * s);
+    ctx.fillStyle = sc(coat[0], coat[1], coat[2]); rr(x - 50 * s, y - 360 * s - bob, 100 * s, 200 * s, 20 * s); ctx.fill();
+    ctx.fillStyle = sc(230, 190, 150); circ(x, y - 410 * s - bob, 36 * s);
+    ctx.fillStyle = sc(110, 70, 40); ctx.fillRect(x + 56 * s, y - 120 * s, 70 * s, 110 * s);
+  }
+};
+
+/* ============================ world render ============================ */
+function drawSky() {
+  const g = ctx.createLinearGradient(0, 0, 0, HOR + 2);
+  g.addColorStop(0, rgbs(env.top)); g.addColorStop(1, rgbs(env.hor)); ctx.fillStyle = g; ctx.fillRect(0, 0, W, HOR + 2);
+  // sun
+  const a = (hour - 6) / 12;
+  if (a > -0.05 && a < 1.05) {
+    const sx = W / 2 - Math.cos(a * Math.PI) * W * 0.46, sy = HOR - Math.sin(a * Math.PI) * H * 0.33, al = 1 - wx.cloud * 0.9;
+    const rg = ctx.createRadialGradient(sx, sy, 0, sx, sy, 170 * U); rg.addColorStop(0, 'rgba(255,235,180,' + 0.6 * al + ')'); rg.addColorStop(1, 'rgba(255,235,180,0)');
+    ctx.fillStyle = rg; ctx.fillRect(sx - 170 * U, sy - 170 * U, 340 * U, 340 * U);
+    ctx.fillStyle = 'rgba(255,246,214,' + al + ')'; circ(sx, sy, 28 * U);
+  }
+  // clouds
+  const amt = wx.cloud * 1.05, storm = wx.cloud * (0.4 + 0.6 * wx.rain);
+  const cc = mixc(mixc([255, 255, 255], [118, 124, 136], storm), env.hor, 0.35);
+  const cdark = Math.max(0.3, env.amb * 0.4 + 0.6);
+  for (const c of clouds) {
+    const al = clamp((amt - c.thr) * 6, 0, 1) * 0.92; if (al <= 0) continue;
+    const cx = (((c.x + cloudOff * c.sp) % 1.5) - 0.25) * W, cy = c.y * HOR * 1.05, s = c.s * 70 * U * (1 + storm * 0.5);
+    ctx.fillStyle = rgbs(cc, cdark); ctx.globalAlpha = al;
+    ell(cx, cy, s * 1.6, s * 0.5); ell(cx - s * 0.8, cy + s * 0.1, s, s * 0.45); ell(cx + s, cy + s * 0.05, s * 1.1, s * 0.42); ell(cx, cy - s * 0.25, s * 0.9, s * 0.5);
+  }
+  ctx.globalAlpha = 1;
+  if (wx.storm > 0.05) { const g2 = ctx.createLinearGradient(0, HOR - 120 * U, 0, HOR); g2.addColorStop(0, 'rgba(40,44,54,0)'); g2.addColorStop(1, 'rgba(40,44,54,' + 0.5 * wx.storm + ')'); ctx.fillStyle = g2; ctx.fillRect(0, HOR - 120 * U, W, 120 * U); }
+  // hills
+  const layers = [[0.3, 90, 40, [120, 130, 125], 0.6, 0.0035, 1.1], [0.55, 70, 18, [112, 112, 80], 0.42, 0.006, 3.4], [0.9, 48, 4, [104, 100, 64], 0.28, 0.01, 5.7]];
+  for (const [par, amp, base, col, fogA, fr, ph] of layers) {
+    SF = fogA; ctx.fillStyle = sc(col[0], col[1], col[2]); ctx.beginPath(); ctx.moveTo(0, HOR + 2);
+    const off = bgOff * par;
+    for (let x = 0; x <= W + 12; x += 12) { const t = (x + off) * fr; ctx.lineTo(x, HOR - (base + amp * (0.5 + 0.28 * Math.sin(t) + 0.17 * Math.sin(t * 2.3 + ph) + 0.1 * Math.sin(t * 5.1 + ph * 2))) * U); }
+    ctx.lineTo(W, HOR + 2); ctx.fill();
+  }
+}
+function drawWorld() {
+  WG = 0.45 * wx.storm + 0.12 * wx.cloud; WD = 1 - 0.28 * wx.storm - 0.08 * wx.cloud;
+  FR = env.fog[0]; FG = env.fog[1]; FB = env.fog[2];
+  drawSky();
+  SF = 1; ctx.fillStyle = sc(170, 156, 82); ctx.fillRect(0, HOR, W, H - HOR);
+  const base = findSeg(position), bp = (position % SEG) / SEG;
+  const pSeg = findSeg(position + playerZ), pp = ((position + playerZ) % SEG) / SEG;
+  const playerY = lerp(pSeg.p1.world.y, pSeg.p2.world.y, pp);
+  let maxy = H, x = 0, dx = -(base.curve * bp);
+  const wet = 1 - 0.22 * wx.rain;
+  for (let n = 0; n < DRAW; n++) {
+    const seg = segments[(base.index + n) % N], looped = seg.index < base.index, camZ = position - (looped ? trackLen : 0);
+    seg.fog = 1 - 1 / Math.exp(Math.pow(n / DRAW, 2) * env.fogDen); seg.clip = maxy;
+    project(seg.p1, playerX * ROADW - x, playerY + camH, camZ);
+    project(seg.p2, playerX * ROADW - x - dx, playerY + camH, camZ);
+    x += dx; dx += seg.curve;
+    const p1 = seg.p1.screen, p2 = seg.p2.screen;
+    if (seg.p1.camera.z <= camDepth || p2.y >= p1.y || p2.y >= maxy) continue;
+    SF = seg.fog; const alt = (seg.index >> 2) & 1, j = seg.gv;
+    ctx.fillStyle = sc((alt ? 162 : 172) + j, (alt ? 148 : 158) + j, (alt ? 76 : 84) + j * 0.5);
+    ctx.fillRect(0, p2.y, W, p1.y - p2.y);
+    const e = 1.13, bc = sc(152, 120, 82, wet);
+    quad(p1.x - p1.w * e, p1.y, p1.x - p1.w, p1.y, p2.x - p2.w, p2.y, p2.x - p2.w * e, p2.y, bc);
+    quad(p1.x + p1.w, p1.y, p1.x + p1.w * e, p1.y, p2.x + p2.w * e, p2.y, p2.x + p2.w, p2.y, bc);
+    if (seg.pw1 || seg.pw2) {
+      quad(p1.x + p1.w, p1.y, p1.x + p1.w * (1 + seg.pw1), p1.y, p2.x + p2.w * (1 + seg.pw2), p2.y, p2.x + p2.w, p2.y, sc(176, 168, 152, wet));
+      if (seg.zs || seg.ze) { const pp1 = seg.zs ? p1 : p2, pw = seg.zs ? seg.pw1 : seg.pw2; ctx.strokeStyle = sc(240, 200, 40); ctx.lineWidth = Math.max(1, pp1.w * 0.03); ctx.beginPath(); ctx.moveTo(pp1.x + pp1.w, pp1.y); ctx.lineTo(pp1.x + pp1.w * (1 + Math.max(pw, 0.95)), pp1.y); ctx.stroke(); }
+    }
+    quad(p1.x - p1.w, p1.y, p1.x + p1.w, p1.y, p2.x + p2.w, p2.y, p2.x - p2.w, p2.y, sc(alt ? 192 : 184, alt ? 154 : 147, alt ? 104 : 98, wet));
+    if (p1.w > 5) {
+      const rc = sc(160, 124, 82, wet);
+      for (const c of [-0.68, -0.32, 0.32, 0.68]) quad(p1.x + p1.w * (c - 0.07), p1.y, p1.x + p1.w * (c + 0.07), p1.y, p2.x + p2.w * (c + 0.07), p2.y, p2.x + p2.w * (c - 0.07), p2.y, rc);
+      if (alt) quad(p1.x - p1.w * 0.02, p1.y, p1.x + p1.w * 0.02, p1.y, p2.x + p2.w * 0.02, p2.y, p2.x - p2.w * 0.02, p2.y, sc(222, 210, 165, wet));
+    }
+    maxy = p1.y;
+  }
+  // sprites & lines
+  for (let n = DRAW - 1; n >= 0; n--) {
+    const seg = segments[(base.index + n) % N], p1 = seg.p1.screen, p2 = seg.p2.screen;
+    if (seg.p1.camera.z <= camDepth * 1.05 || seg.p2.camera.z <= camDepth) continue;
+    SF = seg.fog; const clip = seg.clip;
+    if (seg.fence || seg.wire) {
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, clip); ctx.clip();
+      ctx.lineWidth = Math.max(1, p1.k * 6);
+      if (seg.fence) {
+        ctx.strokeStyle = sc(120, 110, 100);
+        for (const side of seg.fence === 2 ? [-1, 1] : [seg.fence]) {
+          const o = side * 1.5; ctx.beginPath();
+          for (const h of [380, 250]) { ctx.moveTo(p1.x + p1.w * o, p1.y - h * p1.k); ctx.lineTo(p2.x + p2.w * o, p2.y - h * p2.k); }
+          ctx.stroke();
+        }
+      }
+      if (seg.wire) {
+        ctx.strokeStyle = sc(40, 38, 36); ctx.lineWidth = Math.max(1, p1.k * 4); ctx.beginPath();
+        for (const d of [-0.25, 0, 0.25]) { const o = seg.wire * 1.75 + d; ctx.moveTo(p1.x + p1.w * o, p1.y - 1840 * p1.k); ctx.lineTo(p2.x + p2.w * o, p2.y - 1840 * p2.k); }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    for (const o of seg.sprites) {
+      const sx = p1.x + p1.w * o.off, sy = p1.y, k = p1.k;
+      if (sx + 2200 * k < 0 || sx - 2200 * k > W || k < 0.004) continue;
+      if (sy > clip) { if (sy - 2500 * k > clip) continue; ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, clip); ctx.clip(); SP[o.t](sx, sy, k, o); ctx.restore(); }
+      else SP[o.t](sx, sy, k, o);
+    }
+  }
+}
+
+/* ============================ lighting ============================ */
+function beamPts(side, a, b) {
+  const sa = segments[(a) % N].p1.screen, sb = segments[(b) % N].p1.screen, c = side * 0.3;
+  return [sa.x + sa.w * (c - 0.5), sa.y, sa.x + sa.w * (c + 0.5), sa.y, sb.x + sb.w * (c + 1.0), sb.y, sb.x + sb.w * (c - 1.0), sb.y];
+}
+function drawDarkness() {
+  const d = env.dark, cx = W / 2, by = busBaseY();
+  lctx.globalCompositeOperation = 'source-over'; lctx.clearRect(0, 0, W, H);
+  lctx.fillStyle = 'rgba(5,9,26,' + d + ')'; lctx.fillRect(0, 0, W, H);
+  lctx.globalCompositeOperation = 'destination-out';
+  const L = lightLevel, pidx = findSeg(position + playerZ).index;
+  if (L > 0.02) {
+    for (const side of [-1, 1]) {
+      const q = beamPts(side, pidx + 9, pidx + 42);
+      const g = lctx.createLinearGradient(0, q[1], 0, q[5]); g.addColorStop(0, 'rgba(0,0,0,' + 0.95 * L + ')'); g.addColorStop(0.5, 'rgba(0,0,0,' + 0.6 * L + ')'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      lctx.fillStyle = g; lctx.beginPath(); lctx.moveTo(q[0], q[1]); lctx.lineTo(q[2], q[3]); lctx.lineTo(q[4], q[5]); lctx.lineTo(q[6], q[7]); lctx.closePath(); lctx.fill();
+    }
+    const hy = by - busW * 0.5, hg = lctx.createRadialGradient(cx, hy, 0, cx, hy, busW * 2.1);
+    hg.addColorStop(0, 'rgba(0,0,0,' + 0.75 * L + ')'); hg.addColorStop(1, 'rgba(0,0,0,0)'); lctx.fillStyle = hg; lctx.fillRect(cx - busW * 2.2, hy - busW * 2.2, busW * 4.4, busW * 4.4);
+  }
+  ctx.drawImage(lcv, 0, 0);
+  // additive beam glow
+  if (L > 0.02) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const side of [-1, 1]) {
+      const q = beamPts(side, pidx + 9, pidx + 42), a = (0.1 + 0.18 * d) * L;
+      const g = ctx.createLinearGradient(0, q[1], 0, q[5]); g.addColorStop(0, 'rgba(255,238,190,' + a + ')'); g.addColorStop(1, 'rgba(255,238,190,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.lineTo(q[2], q[3]); ctx.lineTo(q[4], q[5]); ctx.lineTo(q[6], q[7]); ctx.closePath(); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+}
+
+/* ============================ bus ============================ */
+function drawBus(charred) {
+  const bw = busW, bh = bw * 0.8, bl = charred ? 0.12 : lerp(0.32, 1, env.ambEff);
+  const c = (r, g, b) => 'rgb(' + (r * bl | 0) + ',' + (g * bl | 0) + ',' + (b * bl | 0) + ')';
+  const sp = speed / MAXSPEED, bounce = Math.sin(busPhase * 0.9) * 1.2 * U * sp + (isOff && state === 'play' ? (Math.random() - 0.5) * 5 * U : 0);
+  const lit = !charred && (lightLevel > 0.3 || braking), inter = !charred && (env.ambEff < 0.7 || loading());
+  const haz = !charred && (loading() || (stop && stop.state === 'ahead' && speed < 1500 && ((findSeg(position + playerZ).index - stop.start + N) % N) < stop.len)) && Math.sin(T * 14) > 0;
+  ctx.save(); ctx.translate(W / 2, busBaseY() + bounce); ctx.rotate(roll);
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ell(0, -U, bw * 0.62, bw * 0.07);
+  ctx.fillStyle = c(22, 22, 24); for (const s of [-1, 1]) { rr(s * bw * 0.41 - bw * 0.085, -bw * 0.24, bw * 0.17, bw * 0.24, 4 * U); ctx.fill(); }
+  // body
+  ctx.fillStyle = c(230, 196, 86); ctx.fillRect(-bw / 2, -bh, bw, bh - bw * 0.14);
+  ctx.fillStyle = c(46, 108, 112); ctx.fillRect(-bw / 2, -bh * 0.5, bw, bh * 0.5 - bw * 0.14);
+  // roof
+  ctx.fillStyle = c(242, 234, 204); ctx.beginPath(); ctx.moveTo(-bw / 2, -bh); ctx.lineTo(-bw * 0.46, -bh - bw * 0.2); ctx.lineTo(bw * 0.46, -bh - bw * 0.2); ctx.lineTo(bw / 2, -bh); ctx.fill();
+  ctx.fillStyle = c(150, 150, 150); ctx.fillRect(-bw * 0.18, -bh - bw * 0.16, bw * 0.36, bw * 0.07);
+  // window
+  const wy = -bh * 0.93, wh = bh * 0.36;
+  ctx.fillStyle = inter ? 'rgb(255,222,140)' : c(30, 40, 50); rr(-bw * 0.4, wy, bw * 0.8, wh, 5 * U); ctx.fill();
+  if (!charred) { ctx.fillStyle = inter ? 'rgb(90,60,30)' : c(14, 20, 26); for (let i = 0; i < Math.min(pax, 7); i++) circ(-bw * 0.34 + i * bw * 0.113, wy + wh * 0.7, bw * 0.035); }
+  ctx.fillStyle = c(200, 170, 70); for (const f of [-0.133, 0.133]) ctx.fillRect(bw * f - 1.5 * U, wy, 3 * U, wh);
+  // lights
+  const tl = haz ? [255, 160, 20] : lit ? [255, 45, 35] : [110, 14, 14];
+  for (const s of [-1, 1]) {
+    ctx.fillStyle = (lit || haz) ? 'rgb(' + tl.join(',') + ')' : c(tl[0], tl[1], tl[2]); rr(s * bw * 0.43 - bw * 0.05, -bh * 0.46, bw * 0.1, bw * 0.15, 3 * U); ctx.fill();
+    ctx.fillStyle = (haz || lightLevel > 0.3) ? 'rgb(255,170,30)' : c(150, 100, 20); ctx.fillRect(s * bw * 0.46 - bw * 0.025, -bh * 0.96, bw * 0.05, bw * 0.03);
+  }
+  ctx.fillStyle = c(235, 230, 200); rr(-bw * 0.11, -bh * 0.4, bw * 0.22, bw * 0.08, 2 * U); ctx.fill();
+  if (bw * 0.05 > 5) { ctx.fillStyle = c(40, 40, 40); ctx.font = '700 ' + (bw * 0.055) + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('BUS 66', 0, -bh * 0.36); }
+  ctx.fillStyle = c(70, 70, 74); ctx.fillRect(-bw * 0.52, -bw * 0.2, bw * 1.04, bw * 0.1);
+  const dg = ctx.createLinearGradient(0, -bh * 0.5, 0, 0); dg.addColorStop(0, 'rgba(176,140,92,0)'); dg.addColorStop(1, 'rgba(176,140,92,' + 0.38 * bl + ')'); ctx.fillStyle = dg; ctx.fillRect(-bw / 2, -bh * 0.5, bw, bh * 0.5);
+  if (lit || haz) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const s of [-1, 1]) { const gx = s * bw * 0.43, gy = -bh * 0.38, g = ctx.createRadialGradient(gx, gy, 0, gx, gy, bw * (braking ? 0.5 : 0.3)); const a = haz ? 0.6 : braking ? 0.7 : 0.35; g.addColorStop(0, haz ? 'rgba(255,170,30,' + a + ')' : 'rgba(255,50,40,' + a + ')'); g.addColorStop(1, 'rgba(255,50,40,0)'); ctx.fillStyle = g; ctx.fillRect(gx - bw, gy - bw, bw * 2, bw * 2); }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.restore();
+}
+
+/* ============================ weather overlays ============================ */
+function drawNightSky() {
+  const sa = clamp(1 - env.amb * 2.2, 0, 1) * (1 - clamp(wx.cloud * 1.2, 0, 1));
+  if (sa <= 0.02) return;
+  ctx.fillStyle = '#fff';
+  for (const s of stars) { if (s.y * H > HOR - 6) continue; ctx.globalAlpha = sa * (0.55 + 0.45 * Math.sin(T * 2 + s.p)); ctx.fillRect(s.x * W, s.y * H, s.s * U, s.s * U); }
+  const a = (((hour >= 18 ? hour - 18 : hour + 6)) / 12);
+  if (a >= 0 && a <= 1) {
+    const mx = W / 2 - Math.cos(a * Math.PI) * W * 0.4, my = HOR - Math.sin(a * Math.PI) * H * 0.3 - 6 * U;
+    ctx.globalAlpha = sa; const g = ctx.createRadialGradient(mx, my, 0, mx, my, 90 * U); g.addColorStop(0, 'rgba(210,225,255,.35)'); g.addColorStop(1, 'rgba(210,225,255,0)'); ctx.fillStyle = g; ctx.fillRect(mx - 90 * U, my - 90 * U, 180 * U, 180 * U);
+    ctx.fillStyle = '#e8ecdd'; circ(mx, my, 20 * U); ctx.fillStyle = 'rgba(160,170,150,.5)'; circ(mx - 6 * U, my - 4 * U, 5 * U); circ(mx + 7 * U, my + 6 * U, 4 * U);
+  }
+  ctx.globalAlpha = 1;
+}
+function drawRain() {
+  if (wx.rain < 0.03) return;
+  const n = (drops.length * wx.rain) | 0, slant = 0.12 + wind * 0.5;
+  ctx.strokeStyle = 'rgba(200,215,235,' + 0.4 * (0.4 + 0.6 * env.ambEff) + ')'; ctx.lineWidth = Math.max(1, 1.2 * U); ctx.beginPath();
+  for (let i = 0; i < n; i++) { const d = drops[i], x = d.x * W, y = d.y * H; ctx.moveTo(x, y); ctx.lineTo(x + slant * d.l * U, y + d.l * U); }
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(70,80,100,' + 0.07 * wx.rain + ')'; ctx.fillRect(0, 0, W, H);
+}
+function drawLightning() {
+  if (lightning <= 0.01) return;
+  if (boltT > 0 && bolt) {
+    ctx.strokeStyle = 'rgba(255,255,255,' + clamp(boltT * 4, 0, 1) + ')'; ctx.lineWidth = 3 * U; ctx.shadowColor = '#bcd'; ctx.shadowBlur = 18 * U;
+    ctx.beginPath(); bolt.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.stroke(); ctx.shadowBlur = 0;
+  }
+  ctx.fillStyle = 'rgba(235,240,255,' + 0.3 * lightning + ')'; ctx.fillRect(0, 0, W, H);
+}
+function drawParts() {
+  for (const p of parts) { const a = (1 - p.life / p.max) * p.a * lerp(0.4, 1, env.ambEff); ctx.fillStyle = 'rgba(' + p.c[0] + ',' + p.c[1] + ',' + p.c[2] + ',' + a + ')'; circ(p.x, p.y, p.r); }
+}
+function drawFx() {
+  for (const p of fx) {
+    const t = p.life / p.max;
+    if (p.k === 'f') { ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'rgba(255,' + (170 - t * 110 | 0) + ',40,' + (1 - t) * 0.8 + ')'; circ(p.x, p.y, p.r); ctx.globalCompositeOperation = 'source-over'; }
+    else if (p.k === 's') { ctx.fillStyle = 'rgba(34,32,30,' + (1 - t) * 0.6 + ')'; circ(p.x, p.y, p.r); }
+    else { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.globalAlpha = 1 - t * t; ctx.fillStyle = 'rgb(' + p.c.join(',') + ')'; ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); ctx.restore(); ctx.globalAlpha = 1; }
+  }
+  if (state === 'dying' && deadT < 0.35) { ctx.fillStyle = 'rgba(255,240,200,' + (1 - deadT / 0.35) + ')'; ctx.fillRect(0, 0, W, H); }
+}
+
+/* ============================ HUD ============================ */
+function txt(s, x, y, size, col, align, weight) {
+  ctx.font = (weight || '700') + ' ' + (size * U) + 'px ' + FONT; ctx.textAlign = align || 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillText(s, x + 1.5 * U, y + 1.5 * U); ctx.fillStyle = col || '#fff'; ctx.fillText(s, x, y);
+}
+function panel(x, y, w, h) { ctx.fillStyle = 'rgba(14,11,8,.55)'; rr(x, y, w, h, 12 * U); ctx.fill(); }
+function fmtDist(m) { return m >= 1000 ? (m / 1000).toFixed(2) + ' km' : Math.floor(m) + ' m'; }
+function wxLabel() { return wx.storm > 0.6 ? 'STORM' : wx.rain > 0.15 ? 'RAIN' : wx.cloud > 0.4 ? 'CLOUDY' : 'CLEAR'; }
+function drawHUD() {
+  const m = 18 * U, dist = odo / 180;
+  panel(m, m, 230 * U, 84 * U);
+  txt('DISTANCE', m + 14 * U, m + 22 * U, 12, '#cdb98f'); txt(fmtDist(dist), m + 14 * U, m + 54 * U, 32);
+  txt('Stops ' + stopsDone + '   Riders ' + pax + '   Best ' + fmtDist(Math.max(save.best, dist)), m + 14 * U, m + 75 * U, 12, '#e8dcc0', 'left', '600');
+  // clock + weather
+  const hh = Math.floor(hour), mm = Math.floor((hour % 1) * 60);
+  panel(W - m - 190 * U, m, 190 * U, 62 * U);
+  txt(String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'), W - m - 14 * U, m + 38 * U, 30, '#fff', 'right');
+  const icon = (hour > 6 && hour < 19.5) ? (wx.cloud > 0.4 ? '☁' : '☀') : '☾';
+  txt(icon + ' ' + wxLabel(), W - m - 14 * U, m + 56 * U, 13, '#cdb98f', 'right');
+  // complaints
+  txt('Complaints ' + '✖'.repeat(missed) + '○'.repeat(Math.max(0, 3 - missed)), W - m - 14 * U, m + 84 * U, 13, missed ? '#ff8a7a' : '#cdb98f', 'right');
+  // engine temp
+  const gw = 300 * U, gh = 18 * U, gx = m, gy = H - m - gh;
+  panel(gx - 8 * U, gy - 40 * U, gw + 16 * U, gh + 52 * U);
+  txt('ENGINE', gx, gy - 16 * U, 13, '#cdb98f'); txt(Math.round(70 + heat * 60) + '°C', gx + gw, gy - 16 * U, 15, heat > 0.75 ? '#ff7060' : '#fff', 'right');
+  ctx.fillStyle = 'rgba(0,0,0,.5)'; rr(gx, gy, gw, gh, 6 * U); ctx.fill();
+  const g = ctx.createLinearGradient(gx, 0, gx + gw, 0); g.addColorStop(0, '#3fa9f5'); g.addColorStop(0.5, '#f5c542'); g.addColorStop(0.78, '#f2701d'); g.addColorStop(1, '#e02424');
+  ctx.save(); rr(gx, gy, gw, gh, 6 * U); ctx.clip(); ctx.fillStyle = g; ctx.fillRect(gx, gy, gw * heat, gh); ctx.restore();
+  ctx.fillStyle = '#fff'; ctx.fillRect(gx + gw * 0.75, gy - 3 * U, 2 * U, gh + 6 * U);
+  if (heat > 0.75 && Math.sin(T * 12) > 0) { ctx.strokeStyle = '#ff3b2e'; ctx.lineWidth = 3 * U; rr(gx, gy, gw, gh, 6 * U); ctx.stroke(); }
+  // speed
+  panel(W - m - 170 * U, H - m - 84 * U, 170 * U, 84 * U);
+  txt(String(Math.round(speed / 50)), W - m - 70 * U, H - m - 26 * U, 52, '#fff', 'right'); txt('km/h', W - m - 14 * U, H - m - 28 * U, 14, '#cdb98f', 'right');
+  const lc = lightLevel > 0.5;
+  txt('◐ LIGHTS ' + ['AUTO', 'ON', 'OFF'][lightMode], W - m - 14 * U, H - m - 94 * U, 12, lc ? '#ffe27a' : '#8a8576', 'right');
+  // toasts
+  toasts.forEach((t, i) => txt(t.s, W / 2, 110 * U + i * 28 * U, 20, t.c, 'center'));
+  // stop prompt
+  if (stop && stop.state !== 'done' && stop.state !== 'missed') {
+    const pidx = findSeg(position + playerZ).index, rel = (stop.start - pidx + N) % N;
+    if (stop.state === 'loading') {
+      const w = 340 * U, x = W / 2 - w / 2, y = 150 * U + toasts.length * 28 * U;
+      txt(stop.mode === 'board' ? 'BOARDING PASSENGERS...' : stop.mode === 'alight' ? 'LETTING PASSENGERS OFF...' : 'BOARDING & ALIGHTING...', W / 2, y, 20, '#ffd34d', 'center');
+      ctx.fillStyle = 'rgba(0,0,0,.5)'; rr(x, y + 10 * U, w, 16 * U, 8 * U); ctx.fill(); ctx.fillStyle = '#ffd34d'; rr(x, y + 10 * U, Math.max(8 * U, w * stop.prog / stop.need), 16 * U, 8 * U); ctx.fill();
+      txt('Engine heating — hurry!', W / 2, y + 50 * U, 14, '#ff9a7a', 'center');
+    } else if (rel < N / 2) {
+      const inZone = ((pidx - stop.start + N) % N) < stop.len;
+      txt(inZone ? 'PULL IN ON THE RIGHT & STOP' : 'BUS STOP  ➔  ' + Math.floor(rel * SEG / 180) + ' m', W / 2, 78 * U, 20, '#ffd34d', 'center');
+    }
+  }
+  if (state === 'play' && isOff) {
+    const a = 0.25 + 0.2 * Math.sin(T * 14), g2 = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.85); g2.addColorStop(0, 'rgba(255,0,0,0)'); g2.addColorStop(1, 'rgba(255,30,20,' + a + ')');
+    ctx.fillStyle = g2; ctx.fillRect(0, 0, W, H);
+    if (Math.sin(T * 14) > -0.2) txt('⚠ OFF ROAD ⚠', W / 2, H * 0.3, 34, '#ff5a4a', 'center');
+  }
+  if (state === 'play' && heat > 0.8 && Math.sin(T * 10) > 0) txt('ENGINE OVERHEATING!', W / 2, H * 0.36, 26, '#ff8a3a', 'center');
+}
+function overlayBox(lines, y0) {
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(0, 0, W, H);
+  lines.forEach((l, i) => txt(l[0], W / 2, y0 + i * 34 * U + (l[3] || 0), l[1], l[2], 'center'));
+}
+function drawScreens() {
+  if (state === 'title') {
+    ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(0, 0, W, H);
+    txt('DUSTY ROAD BUS', W / 2, H * 0.2, 64, '#f2d98a', 'center', '800');
+    txt('Drive as far as you can. Stay on the road.', W / 2, H * 0.2 + 40 * U, 20, '#fff', 'center', '500');
+    const cont = !!save.run, y = H * 0.42;
+    txt(cont ? 'ENTER  —  Continue run (' + fmtDist(save.run.odo / 180) + ')' : 'ENTER  —  Start driving', W / 2, y, 26, '#ffd34d', 'center');
+    if (cont) txt('N  —  New run', W / 2, y + 36 * U, 20, '#fff', 'center');
+    const l = ['W / ↑  gas     S / ↓ / SPACE  brake     A D / ← →  steer', 'H  headlights (auto/on/off)     M  mute     P  pause & save' + (hasDesktop ? '     F  fullscreen     Q  quit' : ''),
+      'The bus creeps LEFT. Off-road: beeping, engine heats up, then BOOM.', 'Pull in at bus stops fast — the engine heats while you wait.'];
+    l.forEach((s, i) => txt(s, W / 2, H * 0.62 + i * 28 * U, 16, '#e8dcc0', 'center', '500'));
+    txt('Best ' + fmtDist(save.best) + '   ·   Total ' + fmtDist(save.totalDist) + '   ·   Runs ' + save.runs + '   ·   Stops ' + save.totalStops, W / 2, H * 0.9, 16, '#cdb98f', 'center', '600');
+  } else if (state === 'paused') {
+    overlayBox([['PAUSED', 54, '#f2d98a', 0], ['Progress saved.', 18, '#fff', 14], ['P / ESC / ENTER  —  resume', 20, '#ffd34d', 24]].concat(hasDesktop ? [['Q  —  save & quit', 18, '#fff', 24]] : []), H * 0.35);
+  } else if (state === 'dead') {
+    const dist = odo / 180, nb = dist >= save.best - 0.001 && dist > 0;
+    overlayBox([[deadReason.toUpperCase(), 40, '#ff7a5a', 0], ['You drove ' + fmtDist(dist), 30, '#fff', 14], ['Stops completed: ' + stopsDone, 18, '#e8dcc0', 20], [nb ? 'NEW BEST DISTANCE!' : 'Best: ' + fmtDist(save.best), 22, nb ? '#9fe870' : '#cdb98f', 24], [deadT > 1.8 ? 'ENTER / click — back to menu' : '', 20, '#ffd34d', 44]], H * 0.3);
+  }
+}
+
+/* ============================ frame ============================ */
+function render() {
+  ctx.save();
+  if (shake > 0.01) ctx.translate((Math.random() - 0.5) * 14 * U * shake, (Math.random() - 0.5) * 10 * U * shake);
+  drawWorld();
+  ctx.restore();
+  drawDarkness();
+  drawNightSky();
+  if (state !== 'title') drawBus(state === 'dying' || state === 'dead');
+  else drawBus(false);
+  drawParts();
+  drawRain();
+  drawLightning();
+  drawFx();
+  if (state === 'play' || state === 'paused') drawHUD();
+  else if (state === 'dying' || state === 'dead') drawHUD();
+  drawScreens();
+}
+let last = performance.now();
+function frame(now) {
+  let dt = Math.min((now - last) / 1000, 0.05); last = now;
+  if (state !== 'paused') update(dt); else { dtGlobal = dt; updateAudio(); }
+  render();
+  requestAnimationFrame(frame);
+}
+window.__bus = { setHour: h => hour = h, setWeather: n => { wxState = n; wx.cloud = WS[n].cloud; wx.rain = WS[n].rain; wx.storm = clamp((wx.rain - 0.45) / 0.55, 0, 1); wxTimer = 999; },
+  start: c => startGame(c), keys, get s() { return { state, heat, speed, playerX, odo, stop, pax, missed, isOff, N, pidx: findSeg(position + playerZ).index }; }, set: (k, v) => { ({ heat: () => heat = v, x: () => playerX = v, speed: () => speed = v, nextStop: () => nextStopIn = v })[k](); }, save: () => save };
+loadSave().then(() => { toTitle(); requestAnimationFrame(frame); });
+})();
+</script>
+</body>
+</html>

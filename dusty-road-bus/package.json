@@ -1,0 +1,24 @@
+{
+  "name": "dusty-road-bus",
+  "productName": "Dusty Road Bus",
+  "version": "1.0.0",
+  "description": "Drive a bus as far as you can down a dusty country road.",
+  "main": "main.js",
+  "author": "Dusty Road Bus",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.dustyroad.bus",
+    "productName": "Dusty Road Bus",
+    "files": ["main.js", "preload.js", "index.html", "package.json"],
+    "win": { "target": ["portable", "nsis"] },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}
