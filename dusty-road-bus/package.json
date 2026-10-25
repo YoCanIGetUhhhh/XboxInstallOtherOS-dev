@@ -17,8 +17,22 @@
   "build": {
     "appId": "com.dustyroad.bus",
     "productName": "Dusty Road Bus",
-    "files": ["main.js", "preload.js", "index.html", "package.json"],
-    "win": { "target": ["portable", "nsis"] },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "package.json",
+      "vendor/**/*"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
