@@ -40,3 +40,13 @@ npm run dist     # builds dist/*.exe (portable + installer)
 ```
 
 The workflow `.github/workflows/build-dusty-road-bus.yml` builds the `.exe` on a Windows runner; download it from the run's **Artifacts**.
+
+## Linux
+```
+cd dusty-road-bus
+npm install
+npm start               # run it
+npm run dist:linux      # builds dist/*.AppImage
+chmod +x dist/*.AppImage && ./dist/*.AppImage
+```
+If Electron complains about the sandbox on your distro, run `npm start -- --no-sandbox`. Needs a working GPU driver (WebGL). Saves go to `~/.config/Dusty Road Bus/save.json`. The Actions workflow also produces a `DustyRoadBus-linux` AppImage artifact.
